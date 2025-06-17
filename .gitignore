@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.venv/
+venv/
+
+# uv package manager
+.uv/
+.venv/
+
+# SSL Certificate
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.priv
+*.p12
+*.pfx
+*.p7b
+*.p7c
+
+# Browser extension
+node_modules/
+*.crx
+*.zip
+
+# Miscellaneous
+user_data/
