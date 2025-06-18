@@ -14,23 +14,16 @@ app.add_middleware(
 )
 
 class MouseEvent(BaseModel):
-    clientX: int
-    clientY: int
+    x: int
+    y: int
     timestamp: int
 
 class MousePayload(BaseModel):
     UUID: str
     data: List[MouseEvent]
 
-@app.get("/my-name/")
-def print_name():
-    return {"name":"Ghlen"}
-
-@app.post("/deng")
-def collect(user: User):
-    return {"name": user.name, "age": user.age}
-
 @app.post("/track-mouse/")
 def track_mouse(payload: MousePayload):
+    print(payload.UUID)
     print(payload)
     return "No data received"
