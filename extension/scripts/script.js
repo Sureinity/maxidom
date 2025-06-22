@@ -10,7 +10,7 @@ let keyDownMap = new Map();
 let mousedownEvent = null;
 
 // The interval (in ms) for sending data to the backend.
-const SEND_INTERVAL_MS = 30000;
+const SEND_INTERVAL_MS = 5000;
 // The duration (in ms) of a mouse pause that signifies the end of a path.
 const MOUSE_PAUSE_THRESHOLD_MS = 200;
 

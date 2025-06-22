@@ -58,10 +58,10 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
       console.log(JSON.stringify(finalPayload, null, 2));
 
       // --- FETCH LOGIC (Temporarily Commented Out for Debugging) ---
-      /*
+
       console.log("Simulating sending data to backend...");
 
-      const response = await fetch("http://127.0.0.1:8000/api/train/", {
+      const response = await fetch(`http://127.0.0.1:8000/api/train/${uuid}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -76,14 +76,11 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
 
       const data = await response.json();
       console.log("FastAPI response:", data);
-      
+
       sendResponse({ status: "success", received: data });
-      */
+
       // --- END OF COMMENTED FETCH LOGIC ---
 
-      console.log(
-        "(DEBUG) Payload processing complete. Fetch call is disabled.",
-      );
       console.log("---------------------------------------------------------");
     } catch (error) {
       console.error("Error during payload processing:", error);
