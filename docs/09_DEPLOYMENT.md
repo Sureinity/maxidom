@@ -100,9 +100,3 @@ For consistency and portability, the recommended deployment method is to contain
 
 -   **API URL**: The URL in the Chrome Extension's `background.js` must be updated from `http://127.0.0.1:8000` to the public domain or IP address of your deployed backend server.
 -   **HTTPS**: In a true production environment, the backend server should be placed behind a reverse proxy (like Nginx) to handle HTTPS (SSL/TLS) termination, load balancing, and serving static files.
-
----
-
-### 4. Visualization
-
-The diagram below illustrates the deployed state of the MaxiDOM system.

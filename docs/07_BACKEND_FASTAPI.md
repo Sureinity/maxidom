@@ -27,13 +27,21 @@ The backend processes data according to the endpoint that was called.
 
 #### 3.1. Training Workflow (`POST /train/{profile_id}`)
 
-This flow is executed during the initial profiling phase for a new user.
+This flow is executed during the initial profiling phase for a new user. The system follows an **"Extract, Store, Train"** model to distribute the computational load and optimize storage.
 
-1.  **Request Validation**: An incoming request to `/train` is received. FastAPI uses Pydantic to automatically validate the JSON body against the predefined schema. If validation fails, a `422` error is returned.
-2.  **Feature Extraction**: The valid JSON payload is passed to the **Feature Extractor**, which calculates all statistical features (e.g., `avg_mouse_speed`, `avg_dwell_time`) and returns a single numerical vector.
-3.  **Data Pooling**: This feature vector is appended to a temporary data store (e.g., a CSV file or in-memory list) associated with the user's `profile_id`.
-4.  **Model Training Trigger**: After a predefined number of data points have been collected (the cold-start period ends), the **Model Manager** is triggered. It trains a new `IsolationForest` model on the entire pool of collected feature vectors.
-5.  **Model Persistence**: The newly trained model is serialized using `joblib` and saved to disk (e.g., `./models/{profile_id}.joblib`). The user's state is now considered "active."
+1.  **Request Validation**: An incoming request to `/train` is received. FastAPI uses Pydantic to automatically validate the JSON body against the predefined schema.
+2.  **Immediate Feature Extraction**: The valid JSON payload is immediately passed to the **Feature Extractor**, which calculates all statistical features and returns a single numerical feature vector.
+3.  **Efficient Storage**: This compact feature vector is appended as a new row to a lightweight data store (e.g., a user-specific CSV file).
+4.  **Model Training Trigger**: After a predefined number of vectors have been collected, the **Model Manager** is triggered as a background task. It trains a new `IsolationForest` model on the entire pool of pre-processed feature vectors.
+
+> **Design Choice: Why Extract Features Immediately?**
+>
+> An alternative approach would be to store the raw JSON payloads first and then perform feature extraction on the entire batch just before training. We deliberately chose to extract features on-the-fly for two key reasons:
+>
+> -   **Distributed Workload**: The computational cost of feature extraction is spread across hundreds of small, fast API calls instead of creating one massive performance spike during the training job. This keeps the server responsive.
+> -   **Storage Efficiency**: A numerical feature vector is significantly smaller than its raw JSON source. This approach minimizes disk space usage in the training data pool.
+>
+> The trade-off is reduced flexibility during development (you cannot "re-extract" features from stored data), but the gains in performance and efficiency are critical for a production-ready system.
 
 #### 3.2. Scoring & Retraining Workflow (`POST /score/{profile_id}`)
 
