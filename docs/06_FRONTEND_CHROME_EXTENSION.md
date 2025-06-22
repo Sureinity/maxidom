@@ -1,4 +1,4 @@
-# 05. Frontend: Chrome Extension
+# 06. Frontend: Chrome Extension
 
 ---
 
