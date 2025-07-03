@@ -1,9 +1,11 @@
-// A helper function to get the UUID from storage.
-// Using a helper makes the code cleaner and handles the async nature of storage.
-async function getProfileUUID() {
-  const result = await chrome.storage.local.get("profile_uuid");
-  return result.profile_uuid;
-}
+import {
+  getProfileUUID,
+  getSystemState,
+  getSampleCount,
+  getModelStatus,
+  updateSampleCount,
+  updateModelStatus,
+} from "./utils/helpers.js";
 
 // 1. ON INSTALL: Generate and store a unique identifier for this browser profile.
 // This runs only once when the extension is installed or updated.
