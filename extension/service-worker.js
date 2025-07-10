@@ -27,70 +27,36 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 // 2. ON MESSAGE: Listen for aggregated data from the content script.
 // This is an async function to allow for `await`.
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-  // Check the message type to ensure we're handling the right request.
   if (message.type === "AGGREGATED_USER_EVENTS") {
-    console.log("Message received in service_worker from content script.");
-    console.log("---------------------------------------------------------");
-
     try {
-      // Step 1: Log the raw message payload as it arrives.
-      console.log("Raw payload from content script:", message.payload);
-
-      // Step 2: Retrieve the profile's unique ID from storage.
-      console.log("Attempting to retrieve profile UUID from storage...");
       const uuid = await getProfileUUID();
+      const state = await getSystemState();
+      let endpoint = "";
+      let response = null;
 
-      if (!uuid) {
-        console.error(
-          "CRITICAL ERROR: Profile UUID not found in storage. Cannot proceed.",
-        );
-        return; // Stop execution if there's no ID.
-      }
-      console.log("Successfully retrieved UUID:", uuid);
-
-      // Step 3: Prepare the final payload for the backend.
-      // We take the payload from the content script and inject the correct userId.
-      const finalPayload = {
-        userId: uuid, // Overwrite/set the userId field.
-        ...message.payload, // Spread all fields from the content script (startTimestamp, keyEvents, etc.)
+      const payload = {
+        userId: uuid,
+        ...message.payload,
       };
 
-      console.log("Final payload constructed and ready to be sent:");
-      // Using JSON.stringify with formatting for easy reading in the console.
-      console.log(JSON.stringify(finalPayload, null, 2));
+      if (state === "profiling") {
+        endpoint = `http://127.0.0.1:8000/api/train/${uuid}`;
+        response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
 
-      // --- FETCH LOGIC (Temporarily Commented Out for Debugging) ---
-
-      console.log("Simulating sending data to backend...");
-
-      const response = await fetch(`http://127.0.0.1:8000/api/train/${uuid}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(finalPayload),
-      });
-
-      if (!response.ok) {
-        // Handle HTTP errors (e.g., 400, 500).
-        throw new Error(`HTTP error! Status: ${response.status}`);
+        if (response.ok) {
+          console.log(response);
+        }
       }
-
-      const data = await response.json();
-      console.log("FastAPI response:", data);
-
-      sendResponse({ status: "success", received: data });
-
-      // --- END OF COMMENTED FETCH LOGIC ---
-
-      console.log("---------------------------------------------------------");
     } catch (error) {
       console.error("Error during payload processing:", error);
       console.log("---------------------------------------------------------");
       sendResponse({ status: "error", message: error.message });
     }
-
-    // Return true to indicate that we might send a response asynchronously in the future.
-    return true;
   }
 });
