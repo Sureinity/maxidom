@@ -5,6 +5,36 @@ from pathlib import Path
 
 USER_DATA_DIR  = Path(__file__).resolve().parent.parent / "user_data"
 
+# Feature names to be used as CSV headers
+FEATURE_NAMES = [
+    # Mouse Dynamics
+    "avg_mouse_speed",
+    "std_mouse_speed",
+    "avg_mouse_acceleration",
+    "std_mouse_acceleration",
+    "path_straightness",
+    
+    # Click Features
+    "avg_click_duration",
+    "double_click_rate",
+    
+    # Keystroke Dynamics
+    "avg_dwell_time",
+    "std_dwell_time",
+    "avg_flight_time_digraph",
+    "std_flight_time_digraph",
+    
+    # Scrolling Dynamics
+    "avg_scroll_magnitude",
+    "scroll_burstiness",
+    "avg_time_between_scrolls",
+    "scroll_direction_ratio",
+    
+    # Session & Habitual Dynamics
+    "window_focus_blur_rate",
+    "mouse_movement_to_interaction_ratio"
+]
+
 def save_features_to_csv(userId: str,  feature_vector: np.ndarray):
     """
     Save extracted feature vector to a CSV file for the user.
@@ -20,7 +50,7 @@ def save_features_to_csv(userId: str,  feature_vector: np.ndarray):
     headers = ["timestamp"] + FEATURE_NAMES
 
     # Check if file exists to determine if we need to write headers
-    file_exists = features_file.exist()
+    file_exists = features_file.exists()
 
     # Write to CSV
     with open(features_file, "a", newline='') as file:
