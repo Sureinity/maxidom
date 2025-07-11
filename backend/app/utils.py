@@ -5,6 +5,15 @@ from pathlib import Path
 
 USER_DATA_DIR  = Path(__file__).resolve().parent.parent / "user_data"
 
+ISOLATION_FOREST_PARAMS = {
+    'n_estimators': 100,
+    'max_samples': 'auto',
+    'contamination': 'auto',
+    'random_state': 42
+}
+
+MIN_SAMPLES_FOR_TRAINING = 300
+
 # Feature names to be used as CSV headers
 FEATURE_NAMES = [
     # Mouse Dynamics
