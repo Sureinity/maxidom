@@ -2,100 +2,96 @@
 
 ---
 
-### 1. Overview
+### 1. Role and Design Philosophy
 
-The MaxiDOM Chrome Extension is a lightweight sensor responsible for capturing, aggregating, and transmitting user behavioral data. It is designed to be unobtrusive, operate with minimal performance impact, and function as the primary data source for the backend system.
+The MaxiDOM Chrome Extension is designed as a **lightweight, passive sensor and active responder**. Its primary responsibility is to capture user interaction data with minimal performance impact and to act on commands from the backend.
 
-### 2. Core Components & File Structure
+-   **Lightweight**: It performs only basic data aggregation and avoids heavy computation.
+-   **Passive Sensor**: It runs in the background, continuously collecting behavioral data.
+-   **Active Responder**: When an anomaly is detected, it actively challenges the user by injecting a password prompt to verify their identity.
 
-The extension is composed of three main files that work together to perform its duties.
+### 2. File Structure
 
--   **`manifest.json`**
-    -   **Purpose**: The extension's configuration file. It defines permissions, specifies which scripts to run, and sets the extension's properties.
-    -   **Key Permissions**: `storage` (to persist the user's UUID), `scripting` (to inject content scripts), `tabs` (to monitor activity across tabs), and `notifications` (to display anomaly alerts).
+The extension is composed of key files that work together to perform its functions.
 
--   **`background.js` (Service Worker)**
-    -   **Purpose**: The central nervous system of the extension. It runs persistently in the background.
-    -   **Responsibilities**: Manages state (user UUID, profiling vs. detection mode), aggregates data received from content scripts, handles session timing, and communicates with the FastAPI backend.
+| File | Role |
+| :--- | :--- |
+| **`manifest.json`** | **The Blueprint**: Defines the extension's metadata, permissions, and scripts. |
+| **`content.js`** | **The Listener & Interactor**: Injected into every webpage. It listens for DOM events and is also responsible for injecting and managing the password overlay UI. |
+| **`service_worker.js`** | **The Brain**: The central coordinator. It receives raw events, aggregates them, manages state, and handles all communication with the backend API. |
+| **`onboarding.html`** | **The Enrollment Page**: A dedicated page for the one-time user enrollment process, where the verification password is set. |
 
--   **`content.js`**
-    -   **Purpose**: The "eyes and ears" of the extension. This script is injected into every web page the user visits.
-    -   **Responsibilities**: Listens for raw DOM events (`mousemove`, `keydown`, etc.) and forwards them to `background.js` for processing. It performs no aggregation itself to remain as lightweight as possible.
+### 3. Operational Logic
 
-### 3. Logic and Workflow
+The extension's workflow can be broken down into distinct stages.
 
-#### 3.1. Initialization and Profile ID
+#### 3.1. Enrollment (One-Time Setup)
 
-1.  On first installation (`chrome.runtime.onInstalled` event), `background.js` checks `chrome.storage.local` for a `profile_id`.
-2.  If no ID exists, it generates a new UUID v4 and saves it to storage. This ID will be used in all future API requests to identify the user's profile.
+-   Upon first installation, the user is directed to `onboarding.html`.
+-   The user sets their verification password.
+-   The script in the onboarding page sends the password to `service_worker.js`, which securely transmits it to the `POST /enroll/{profile_id}` endpoint.
+-   Once enrollment is successful, the extension's `system_state` is set to `"profiling"`.
 
-#### 3.2. Data Capture and Aggregation
+#### 3.2. Data Collection (`content.js`)
 
-1.  **Capture**: The `content.js` script attaches event listeners to the DOM for all relevant behavioral events (mouse, key, scroll, etc.).
-2.  **Forwarding**: When an event fires, `content.js` sends the raw event data (e.g., `{type: 'mousemove', t: 167..., x: 100, y: 150}`) to `background.js` using `chrome.runtime.sendMessage`.
-3.  **Aggregation**: The `background.js` script listens for these messages. It maintains a central buffer where it performs "lightweight aggregation":
-    -   Pairs corresponding `keydown` and `keyup` events into single objects.
-    -   Groups sequences of `mousemove` events into distinct "paths".
-    -   Calculates click duration by matching `mousedown` and `mouseup`.
+1. **Capture**: The `content.js` script attaches event listeners to the DOM for all relevant behavioral events (mouse, key, scroll, etc.).
+2. **Forwarding**: When an event fires, `content.js` sends the raw event data (e.g., `{type: 'mousemove', t: 167..., x: 100, y: 150}`) to `service_worker.js` using `chrome.runtime.sendMessage`.
+3. **Aggregation**: The `service_worker.js` script listens for these messages. It maintains a central buffer where it performs "lightweight aggregation":
+    - Pairs corresponding `keydown` and `keyup` events into single objects.
+    - Groups sequences of `mousemove` events into distinct "paths".
+    - Calculates click duration by matching `mousedown` and `mouseup`.
 
-#### 3.3. Session Management and Transmission
+#### 3.3. Data Aggregation & Backend Communication (`service_worker.js`)
 
-1.  The `background.js` script manages a session timer.
-2.  Data is sent to the backend under one of two conditions:
-    -   A fixed time interval of user activity has passed (e.g., 30 seconds).
-    -   The internal data buffer reaches a maximum size (e.g., 500 events).
-3.  When a send condition is met, the aggregated data buffer is packaged into the JSON format defined in the [API Contract](04_API_CONTRACT.md).
-4.  The `fetch` API is used to send a `POST` request to the appropriate backend endpoint (`/train` or `/score`), including the `profile_id` in the URL.
-5.  After a successful transmission, the buffer is cleared.
+-   The background script buffers and aggregates raw events into the structured JSON payload.
+-   A timer triggers the data sending process every 30 seconds of activity.
+-   Based on the `system_state` ("profiling" or "detection"), it sends the payload to either the `/train` or `/score` endpoint.
+-   It listens for the response from the backend. If the response from `/score` contains `{"is_anomaly": true}`, it initiates the Active Response flow.
 
-#### 3.4. Anomaly Response
+### 4. Active Response: The Password Prompt Flow
 
-1.  After sending data to the `/score` endpoint, the `background.js` script awaits the JSON response.
-2.  If the response contains `{"is_anomaly": true}`, the extension uses the `chrome.notifications.create()` API to display a non-intrusive system notification to the user, warning them of the potential impersonation.
+This flow is triggered when the backend flags an anomaly.
+
+1.  **Initiation (`service_worker.js`)**: The background script receives the anomaly flag and immediately sends a message to the active tab's `content.js` script, instructing it to display the password prompt.
+2.  **UI Injection (`content.js`)**: The content script dynamically creates and injects a secure overlay into the current page. This overlay consists of a full-page semi-transparent background and a centered modal with a password input field and a submit button.
+3.  **User Input Handling (`content.js` -> `service_worker.js`)**: When the user enters their password and submits the form, the `content.js` script captures the input and sends it back to `service_worker.js`.
+4.  **Verification Request (`service_worker.js`)**: The background script receives the password attempt and makes a `fetch` call to the `POST /verify_password/{profile_id}` endpoint.
+5.  **Handling the Result (`service_worker.js` -> `content.js`)**: The background script receives the verification result (`{"verified": true/false}`) and relays it to `content.js`.
+    -   If `verified` is `true`, the content script removes the overlay from the DOM.
+    -   If `verified` is `false`, the content script displays an "Incorrect password" error message within the overlay, allowing the user to try again.
 
 ---
 
-### 4. Visualization
+### 5. Visualization
 
-This diagram illustrates the internal data flow within the Chrome Extension.
+The following diagram illustrates the internal data flow within the Chrome Extension, including the anomaly response loop.
 
 ```mermaid
 graph TD
-    subgraph "Web Page (Content Script)"
-        A["DOM Events - mousemove, keydown, etc."] -->|Capture| B(content.js)
-        B -->|chrome.runtime.sendMessage| C{Raw Event Stream}
+    subgraph "Data Collection Flow"
+        A[DOM Events] --> B(content.js);
+        B --> C(service_worker.js);
+        C --> D[Aggregates Data];
+        D --> E[POST /score or /train];
+        E --> F[Backend API];
+    end
+    
+    F --> G{API Response};
+    G --> H{is_anomaly == true?};
+    
+    subgraph "Normal Path"
+        H -- "No" --> I([Continue Monitoring]);
     end
 
-    subgraph "Extension Core (Background Script)"
-        C --> D[Event Buffer]
-        D -->|Aggregated into JSON| E[Data Aggregator]
-        
-        subgraph "State Management"
-            F["chrome.storage - profile_id - system_state"]
-        end
-
-        G["Session Timer - Every 30s"] -->|Triggers Send| H{Send Logic}
-        
-        E --> H
-        F -->|Reads State| H
-
-        H -- "Is state 'profiling'?" --> I{Choose Endpoint}
-        I -- "Yes" --> J[POST /train]
-        I -- "No" --> K[POST /score]
-
-        J --> L[Backend API]
-        K --> L[Backend API]
+    subgraph "Anomaly Response Flow"
+        H -- "Yes" --> J[service_worker.js sends<br>message to content.js];
+        J --> K[content.js injects<br>Password Overlay];
+        L(👤 User enters password) --> K;
+        K --> M[content.js sends<br>password to service_worker.js];
+        M --> N[service_worker.js sends<br>POST /verify_password];
+        N --> F;
+        G --> |"Verification response received"| O{Verification Response};
+        O -- "True" --> P[content.js removes overlay];
+        O -- "False" --> Q[content.js shows error];
     end
-
-    subgraph "User Feedback"
-        M[API Response] --> N{Check 'is_anomaly'}
-        N -- "True" --> O[Trigger UI Alert - e.g., Notification]
-        N -- "False" --> P([No Action])
-    end
-
-    L --> M
-
-    style A fill:#f5e6cc,stroke:#333
-    style L fill:#d6eaff,stroke:#333
 ```
-

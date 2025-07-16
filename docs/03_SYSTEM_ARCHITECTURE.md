@@ -11,27 +11,29 @@ MaxiDOM is built on a **Client-Server** architecture. This model cleanly separat
 
 ### 2. Component Breakdown
 
-#### 2.1. Chrome Extension
+#### 2.1. Chrome Extension (The Sensor & Responder)
 
-The extension is responsible for capturing user behavior without impacting performance. Its duties are strictly limited to:
+The extension is responsible for capturing user behavior and responding to backend commands. Its duties include:
 
 -   **Data Collection**: Using DOM event listeners (`mousemove`, `keydown`, `wheel`, etc.) to capture raw interaction data.
--   **Data Aggregation**: Structuring raw events into a clean, aggregated JSON payload. This involves grouping mouse movements into paths and pairing key-down/key-up events.
--   **Session Management**: Buffering aggregated data and transmitting it to the backend every 30 seconds of activity.
--   **Receiving Feedback**: Listening for responses from the backend (e.g., an anomaly score) and triggering UI alerts if necessary.
+-   **Data Aggregation**: Structuring raw events into a clean, aggregated JSON payload.
+-   **Session Management**: Transmitting data to the backend every 30 seconds of activity.
+-   **Secure Communication**: Sending payloads via HTTPS POST requests to the backend API.
+-   **Active Response**: When an anomaly is detected, the extension is responsible for **injecting an overlay** to prompt the user for their password and sending the input to the backend for verification.
 
-#### 2.2. FastAPI Backend
+#### 2.2. FastAPI Backend (The Brain)
 
 The backend handles all the heavy lifting, ensuring the client remains lightweight. Its responsibilities include:
 
--   **API Endpoints**: Providing clear RESTful endpoints for receiving data (`/score`, `/train`).
+-   **API Endpoints**: Providing clear RESTful endpoints for receiving data (`/score`, `/train`) and handling active verification (`/verify_password`).
 -   **User Identity Management**: Associating incoming data with a specific user profile via a unique `UUID`.
--   **Feature Extraction**: Parsing the aggregated JSON payload and converting it into a fixed-size numerical feature vector suitable for the machine learning model.
+-   **Secure Credential Storage**: Hashing and storing user passwords securely using a strong algorithm like bcrypt.
+-   **Feature Extraction**: Parsing the aggregated JSON payload and converting it into a numerical feature vector.
 -   **Model Lifecycle Management**:
-    -   **Training**: Orchestrating the training of new `Isolation Forest` models during the profiling phase.
-    -   **Scoring**: Loading the appropriate user model and using it to score new data for anomaly detection.
+    -   **Training**: Orchestrating the training of new `Isolation Forest` models.
+    -   **Scoring**: Loading the appropriate user model and using it to score new data.
     -   **Retraining**: Implementing the logic for the periodic retraining feedback loop.
--   **Persistence**: Saving and loading trained Scikit-learn models from the file system (as `.joblib` files), with each model file named after its corresponding `UUID`.
+-   **Persistence**: Saving and loading trained models from the file system.
 
 ### 3. Data Flow
 
@@ -39,61 +41,64 @@ The system follows two primary data flows: **Profiling/Training** and **Detectio
 
 #### 3.1. Profiling & Training Flow
 
-1.  A new user generates a `UUID`.
+1.  A new user enrolls by setting a password and generates a `UUID`.
 2.  The **Chrome Extension** collects and aggregates behavioral data.
 3.  The extension sends the data to a training-specific endpoint (e.g., `/train`).
 4.  The **Backend** receives the data, performs feature extraction, and stores the feature vectors.
-5.  Once enough data is collected (cold start period ends), the backend trains a new `Isolation Forest` model.
-6.  The trained model is serialized and saved to disk, named with the user's `UUID` (e.g., `models/b3d1c2a-....joblib`).
+5.  Once enough data is collected, the backend trains a new `Isolation Forest` model.
+6.  The trained model is serialized and saved to disk.
 7.  The user's state is switched from "profiling" to "detection."
 
-#### 3.2. Detection Flow
+#### 3.2. Detection & Verification Flow
 
-1.  An existing user with a trained model interacts with their browser.
-2.  The **Chrome Extension** collects and aggregates data.
-3.  The extension sends the data payload to the detection endpoint (e.g., `/score`).
-4.  The **Backend** receives the payload and performs the same feature extraction process.
-5.  It loads the user's specific model from disk using their `UUID`.
-6.  It scores the new feature vector against the model.
-7.  It returns a JSON response indicating whether the behavior is an anomaly (e.g., `{"is_anomaly": true}`).
-8.  The **Chrome Extension** receives the response and can display a warning to the user if an anomaly is detected.
+1.  An existing user interacts with their browser.
+2.  The **Chrome Extension** sends the data payload to the detection endpoint (`/score`).
+3.  The **Backend** scores the data.
+4.  **If the behavior is normal**, the backend saves the data to the retraining pool (this is the feedback loop) and sends a normal response.
+5.  **If the behavior is an anomaly**, the backend returns `{"is_anomaly": true}`.
+6.  The **Chrome Extension** receives the anomaly flag and injects a password prompt overlay.
+7.  The user enters their password. The extension sends it to the `POST /verify_password` endpoint.
+8.  The **Backend** verifies the password against the stored hash and returns `{"verified": true/false}`.
+9.  The **Chrome Extension** removes the overlay on success or shows an error on failure.
 
 ---
 
 ### 4. Visualization
 
-The following diagram illustrates the complete architectural flow:
+The following diagram illustrates the complete architectural flow, including the new verification step.
 
 ```mermaid
 graph LR
     subgraph "Chrome Browser (Client)"
         direction LR
-        User(👤 User) -- "Interacts (Mouse, Keys, Scroll)" --> ContentScript[Content Script]
+        User(👤 User) -- "Interacts" --> ContentScript[Content Script]
         ContentScript -- "Raw Events" --> BackgroundScript[Background Script]
         BackgroundScript -- "Aggregates Data (JSON)" --> BackgroundScript
     end
 
     subgraph "FastAPI Backend (Server)"
         direction TB
-        API[API Endpoints<br>/score, /train]
+        API[API Endpoints<br>/score, /train, /verify_password]
         FeatureExtractor[Feature Extraction Engine]
         ModelManager[ML Model Manager]
+        AuthManager[Auth & Password Manager]
         
-        API --> FeatureExtractor
+        API -- "/score, /train" --> FeatureExtractor
         FeatureExtractor --> ModelManager
+        API -- "/verify_password" --> AuthManager
     end
 
     subgraph "Persistence"
-        ModelStorage[(<br>Trained Models<br>./models/uuid.joblib)]
+        ModelStorage[(Trained Models)]
+        UserDB[(User Credentials<br>Hashed Passwords)]
     end
 
-    BackgroundScript -- "POST /score or /train<br>(Aggregated JSON)" --> API
-    API -- "JSON Response<br>{'is_anomaly': ...}" --> BackgroundScript
+    BackgroundScript -- "POST /score or /train" --> API
+    API -- "JSON Response" --> BackgroundScript
 
-    ModelManager -- "Loads Model" --> ModelStorage
-    ModelManager -- "Saves Model" --> ModelStorage
+    ModelManager -- "Loads/Saves Model" --> ModelStorage
+    AuthManager -- "Loads/Saves Hash" --> UserDB
 
-    style User fill:#d6eaff,stroke:#333
-    style ModelStorage fill:#f5e6cc,stroke:#333
-
+    User -- "Enters Password" --> BackgroundScript
+    BackgroundScript -- "POST /verify_password" --> API
 ```

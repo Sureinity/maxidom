@@ -18,7 +18,7 @@ MaxiDOM is designed to close this gap by continuously verifying the user's ident
 
 MaxiDOM introduces a layer of security that works passively in the background. It verifies identity not by asking for credentials, but by observing the subconscious patterns of user interaction with the browser.
 
-The system builds a unique biometric "signature" for a user and flags any significant deviation from this signature as a potential anomaly, providing real-time defense against impersonation.
+The system builds a unique biometric "signature" for a user and flags any significant deviation from this signature as a potential anomaly. When an anomaly is detected, the system can issue an **active challenge**—such as a password prompt—to confirm the user's identity and provide real-time defense against impersonation.
 
 ### 3. Core Principles
 
@@ -51,7 +51,7 @@ Each browser profile is protected by its own dedicated machine learning model.
 
 MaxiDOM operates in a continuous lifecycle:
 
-1.  **Profiling (Cold Start)**: When first installed, the extension enters a data collection phase to gather enough baseline data to build an initial, reliable profile.
+1.  **Enrollment & Profiling (Cold Start)**: When first installed, the user enrolls by setting a verification password. The extension then enters a data collection phase to gather enough baseline data to build an initial, reliable profile.
 2.  **Training**: The backend uses the collected data to train the initial `Isolation Forest` model for that user's UUID.
-3.  **Detection**: Once a model is active, all new behavioral data is scored against it in near real-time. If the data is flagged as an anomaly, the system can trigger a response.
-4.  **Feedback Loop (Retraining)**: To adapt to natural, gradual changes in a user's behavior over time, the model is periodically retrained with new, verified data.
+3.  **Detection**: Once a model is active, all new behavioral data is scored against it in near real-time. If the data is flagged as an anomaly, the system triggers a **step-up authentication challenge** by prompting the user for their password via an overlay.
+4.  **Feedback Loop (Retraining)**: To adapt to natural, gradual changes in a user's behavior over time, the model is periodically retrained with new, validated data.
