@@ -46,12 +46,12 @@ FEATURE_NAMES = [
     "mouse_movement_to_interaction_ratio"
 ]
 
-def save_features_to_csv(userId: str,  feature_vector: np.ndarray):
+def save_features_to_csv(profile_id: str,  feature_vector: np.ndarray):
     """
     Save extracted feature vector to a CSV file for the user.
     Each row represents one sample with timestamp and feature values.
     """
-    user_dir = Path(USER_DATA_DIR) / userId
+    user_dir = Path(USER_DATA_DIR) / profile_id
     user_dir.mkdir(exist_ok=True, parents=True)
 
     features_file = user_dir / "features.csv"
@@ -70,20 +70,20 @@ def save_features_to_csv(userId: str,  feature_vector: np.ndarray):
             writer.writerow(headers)
         writer.writerow(row_data)
     
-    sample_count = count_user_samples(userId)
+    sample_count = count_user_samples(profile_id)
     
     if sample_count >= MIN_SAMPLES_FOR_TRAINING:
         model_path = user_dir / "model.joblib"
         if not model_path.exists():
-            train_model(userId)
+            train_model(profile_id)
 
     return sample_count
     
-def count_user_samples(userId: str) -> int:
+def count_user_samples(profile_id: str) -> int:
     """
     Count the number of samples stored for a specific user.
     """
-    features_file = Path(USER_DATA_DIR) / userId / "features.csv"
+    features_file = Path(USER_DATA_DIR) / profile_id / "features.csv"
     if not features_file.exists():
         return 0
     
@@ -91,19 +91,19 @@ def count_user_samples(userId: str) -> int:
     with open(features_file, "r") as file:
         return sum(1 for _ in file) - 1
     
-def train_model(userId: str):
+def train_model(profile_id: str):
     """
     Train an Isolation Forest model on the user's feature data.
     Returns True if training was successful, False otherwise.
     """
-    user_dir = Path(USER_DATA_DIR) / userId
+    user_dir = Path(USER_DATA_DIR) / profile_id
     features_file = user_dir / "features.csv"
     model_path = user_dir / "model.joblib"
 
-    sample_count = count_user_samples(userId)
+    sample_count = count_user_samples(profile_id)
 
     if sample_count < MIN_SAMPLES_FOR_TRAINING:
-        print(f"Not enough samples ({sample_count}) to train model for user {userId}")
+        print(f"Not enough samples ({sample_count}) to train model for user {profile_id}")
         return False
     
     try:
@@ -118,5 +118,5 @@ def train_model(userId: str):
         joblib.dump(model, model_path)
         return True
     except Exception as e:
-        print(f"Error training model for user {userId}: {e}")
+        print(f"Error training model for user {profile_id}: {e}")
         return False

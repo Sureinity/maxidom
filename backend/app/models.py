@@ -32,7 +32,7 @@ class FocusChange(BaseModel):
 
 # Aggregated payload model
 class Payload(BaseModel):
-    userId: str
+    profile_id: str
     startTimestamp: float
     endTimestamp: float
     windowSize: WindowSize

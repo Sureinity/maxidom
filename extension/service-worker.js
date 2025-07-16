@@ -35,7 +35,7 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
       let response = null;
 
       const payload = {
-        userId: uuid,
+        profile_id: uuid,
         ...message.payload,
       };
 
