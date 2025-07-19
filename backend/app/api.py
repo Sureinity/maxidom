@@ -1,15 +1,9 @@
 from models import Payload
 from feature_extraction import FeatureExtractor
-from utils import (
-    USER_DATA_DIR,
-    MIN_SAMPLES_FOR_TRAINING,
-    save_features_to_csv,
-    train_model,
-    load_model,
-    score_features
-)
+from utils import UserModelManager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pathlib import Path
 
 app = FastAPI()
 feature_extractor = FeatureExtractor()
@@ -22,6 +16,41 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+USER_DATA_DIR  = Path(__file__).resolve().parent.parent / "user_data"
+USER_DATA_DIR.mkdir(exist_ok=True)
+
+# Feature names to be used as CSV headers
+FEATURE_NAMES = [
+    # Mouse Dynamics
+    "avg_mouse_speed",
+    "std_mouse_speed",
+    "avg_mouse_acceleration",
+    "std_mouse_acceleration",
+    "path_straightness",
+    
+    # Click Features
+    "avg_click_duration",
+    "double_click_rate",
+    
+    # Keystroke Dynamics
+    "avg_dwell_time",
+    "std_dwell_time",
+    "avg_flight_time_digraph",
+    "std_flight_time_digraph",
+    
+    # Scrolling Dynamics
+    "avg_scroll_magnitude",
+    "scroll_burstiness",
+    "avg_time_between_scrolls",
+    "scroll_direction_ratio",
+    
+    # Session & Habitual Dynamics
+    "window_focus_blur_rate",
+    "mouse_movement_to_interaction_ratio"
+]
+
+model_manager = UserModelManager(FEATURE_NAMES, USER_DATA_DIR)
+
 @app.post("/api/train/{profile_id}")
 def user_data(profile_id:str, payload: Payload):
     """
@@ -32,7 +61,7 @@ def user_data(profile_id:str, payload: Payload):
     payload_dict = payload.dict()
 
     feature_vector = feature_extractor.extract_features(payload_dict)
-    sample_count = save_features_to_csv(profile_id, feature_vector)
+    sample_count = model_manager.save_features(profile_id, feature_vector)
     
     # Return status information including sample count
     return {
@@ -48,36 +77,43 @@ def score_user_data(profile_id: str, payload: Payload):
     Endpoint for scoring user data against a trained model.
     Returns an anomaly score and detection result.
     """
-
     # Check if user directory exists
     user_dir = USER_DATA_DIR / profile_id
     if not user_dir.exists():
         raise HTTPException(status_code=404, detail=f"User {profile_id} not found")
+ 
+    # Extract features from the payload
+    payload_dict = payload.dict()
+    feature_vector = feature_extractor.extract_features(payload_dict)
     
-    # Check and load model
-    model = load_model(profile_id)
-    if not model:
-        # Check if we have enough data to train a model
-        sample_count = count_user_samples(profile_id)
-        if sample_count >= MIN_SAMPLES_FOR_TRAINING:
+    try:
+        # Try to score the features
+        result = model_manager.score(profile_id, feature_vector)
+        
+        # If this was normal behavior (not an anomaly), save it for potential retraining
+        if not result["is_anomaly"]:
+            # Save to retraining pool
+            retraining_samples_count = model_manager.save_features(profile_id, feature_vector, is_retraining_sample=True)
+            logger.info(f"Normal behavior sample saved to retraining pool for user {profile_id}. " +
+                        f"Current pool size: {retraining_samples_count}")
+            
+            # Add retraining pool info to the result
+            result["retraining_pool_size"] = retraining_samples_count
+            result["retraining_threshold"] = model_manager.retraining_threshold
+        
+        return result
+    except ValueError:
+        # No model exists yet, check if we have enough data to train one
+        sample_count = model_manager.count_user_samples(profile_id)
+        if sample_count >= model_manager.min_samples_for_training:
             # Try to train the model now
-            if train_model(profile_id):
-                model = load_model(profile_id)
+            if model_manager.train_initial_model(profile_id):
+                # Try scoring again with the new model
+                try:
+                    return model_manager.score(profile_id, feature_vector)
+                except ValueError:
+                    raise HTTPException(status_code=500, detail="Failed to use newly trained model")
             else:
                 raise HTTPException(status_code=500, detail="Failed to train model")
-        
-        if model is None:  # Still no model
+        else:
             raise HTTPException(status_code=404, detail="Model not found or not enough training data")
-        
-    payload_dict = payload.dict()
-    feature_vector = feature_extractor.extract_features()
-
-    result = score_features(model, feature_vector)
-
-    # If this was normal behavior (not an anomaly), save it for potential retraining
-    if not result["is_anomaly"]:
-        # Save to retraining pool
-        save_features_to_csv(profile_id, feature_vector)
-        print(f"Normal behavior sample saved for user {profile_id}")
-    
-    return result
