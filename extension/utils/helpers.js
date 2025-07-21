@@ -1,4 +1,13 @@
-// Helper functions used by service_worker.
+// Helper functions & configs used by service_worker.
+
+// API base URL
+const BASE_URL = "http://127.0.0.1:8000/api";
+
+// API endpoints
+export const ENDPOINTS = {
+  TRAIN: (uuid) => `${BASE_URL}/train/${uuid}`,
+  SCORE: (uuid) => `${BASE_URL}/score/${uuid}`,
+};
 
 // Get the UUID from storage
 export async function getProfileUUID() {
