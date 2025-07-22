@@ -3,11 +3,32 @@
 // API base URL
 const BASE_URL = "http://127.0.0.1:8000/api";
 
+// Number of samples required during cold-start profiling
+const PROFILING_SAMPLE_THRESHOLD = 300;
+
 // API endpoints
 export const ENDPOINTS = {
   TRAIN: (uuid) => `${BASE_URL}/train/${uuid}`,
   SCORE: (uuid) => `${BASE_URL}/score/${uuid}`,
 };
+
+// Helper to check if we should transition from profiling to detection
+export async function checkPhaseTransition(sampleCount, modelTrained = false) {
+  const currentState = await getSystemState();
+  if (currentState === "profiling") {
+    if (sampleCount >= PROFILING_SAMPLE_THRESHOLD && modelTrained) {
+      console.log(
+        `Profiling phase complete with ${sampleCount} samples collected!`,
+      );
+      console.log(
+        `Model is trained and ready, transitioning to detection phase...`,
+      );
+      await chrome.storage.local.set({ system_state: "detection" });
+      return "detection"; // Transitioned
+    }
+  }
+  return currentState; // No change
+}
 
 // Get the UUID from storage
 export async function getProfileUUID() {
