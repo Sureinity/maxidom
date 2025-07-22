@@ -5,6 +5,9 @@ import csv
 from datetime import datetime
 from pathlib import Path
 import joblib
+import logging
+
+logger = logging.getLogger(__name__)
 
 USER_DATA_DIR  = Path(__file__).resolve().parent.parent / "user_data"
 ISOLATION_FOREST_PARAMS = {
@@ -91,12 +94,12 @@ class UserModelManager:
             if sample_count >= self.min_samples_for_training:
                 model_path = user_dir / "model.joblib"
                 if not model_path.exists():
-                    print(f"Training initial model for user {profile_id} with {sample_count} samples")
+                    logger.info(f"Training initial model for user {profile_id} with {sample_count} samples")
                     self.train_initial_model(profile_id)
         else:
             # For retraining samples, check if we need to retrain
             if sample_count >= self.retraining_threshold:
-                print(f"Retraining threshold reached for user {profile_id}. Triggering retraining.")
+                logger.info(f"Retraining threshold reached for user {profile_id}. Triggering retraining.")
                 self.retrain_model(profile_id)
 
         return sample_count
@@ -134,7 +137,7 @@ class UserModelManager:
         # Check if we have enough data
         sample_count = self.count_user_samples(profile_id)
         if sample_count < self.min_samples_for_training:
-            print(f"Not enough samples ({sample_count}) for user {profile_id}")
+            logger.warning(f"Not enough samples ({sample_count}) for user {profile_id}")
             return False
 
         try:
@@ -143,13 +146,13 @@ class UserModelManager:
             features = df.drop('timestamp', axis=1)
             
             # Train the model
-            print(f"Training Isolation Forest model for user {profile_id} using {len(features)} samples")
+            logger.info(f"Training Isolation Forest model for user {profile_id} using {len(features)} samples")
             model = IsolationForest(**self.model_params)
             model.fit(features)
             
             # Save the model
             joblib.dump(model, model_path)
-            print(f"Model saved to {model_path}")
+            logger.info(f"Model saved to {model_path}")
             
             # Save metadata
             metadata = {
@@ -164,7 +167,7 @@ class UserModelManager:
             
             return True
         except Exception as e:
-            print(f"Error training model for user {profile_id}: {e}")
+            logger.error(f"Error training model for user {profile_id}: {e}")
             return False
         
     def retrain_model(self, profile_id):
@@ -181,11 +184,11 @@ class UserModelManager:
         
         # Check if both data sources exist
         if not features_file.is_file():
-            print(f"Original training data not found for user {profile_id}")
+            logger.warning(f"Original training data not found for user {profile_id}")
             return False
         
         if not retraining_file.is_file():
-            print(f"No retraining data available for user {profile_id}")
+            logger.warning(f"No retraining data available for user {profile_id}")
             return False
         
         try:
@@ -201,7 +204,7 @@ class UserModelManager:
             combined_features = pd.concat([original_features, retraining_features])
             
             # Train new model
-            print(f"Retraining model for user {profile_id} using {len(combined_features)} samples " +
+            logger.info(f"Retraining model for user {profile_id} using {len(combined_features)} samples " +
                         f"({len(original_features)} original + {len(retraining_features)} new)")
             
             model = IsolationForest(**self.model_params)
@@ -211,11 +214,11 @@ class UserModelManager:
             if model_path.exists():
                 backup_path = user_dir / f"model_backup_{datetime.now().strftime('%Y%m%d%H%M%S')}.joblib"
                 model_path.rename(backup_path)
-                print(f"Previous model backed up to {backup_path}")
+                logger.info(f"Previous model backed up to {backup_path}")
             
             # Save new model
             joblib.dump(model, model_path)
-            print(f"Retrained model saved to {model_path}")
+            logger.info(f"Retrained model saved to {model_path}")
             
             # Update metadata
             metadata = {
@@ -235,11 +238,11 @@ class UserModelManager:
                 writer = csv.writer(f)
                 writer.writerow(["timestamp"] + self.feature_names)
             
-            print(f"Retraining pool cleared for user {profile_id}")
+            logger.info(f"Retraining pool cleared for user {profile_id}")
             
             return True
         except Exception as e:
-            print(f"Error retraining model for user {profile_id}: {e}")
+            logger.error(f"Error retraining model for user {profile_id}: {e}")
             return False
 
     def load_model(self, profile_id):
@@ -255,10 +258,10 @@ class UserModelManager:
         
         try:
             model = joblib.load(model_path)
-            print(f"Loaded model for user {profile_id}")
+            logger.info(f"Loaded model for user {profile_id}")
             return model
         except Exception as e:
-            print(f"Error loading model for user {profile_id}: {e}")
+            logger.error(f"Error loading model for user {profile_id}: {e}")
             return None
 
     def score(self, profile_id, feature_vector):
