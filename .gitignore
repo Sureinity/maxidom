@@ -27,6 +27,7 @@ htmlcov/
 .hypothesis/
 .venv/
 venv/
+*.log
 
 # uv package manager
 .uv/
@@ -51,3 +52,4 @@ node_modules/
 
 # Miscellaneous
 user_data/
+
