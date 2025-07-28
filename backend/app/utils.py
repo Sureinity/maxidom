@@ -9,7 +9,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-USER_DATA_DIR  = Path(__file__).resolve().parent.parent / "user_data"
+# Parameters for the Isolation Forest model
 ISOLATION_FOREST_PARAMS = {
     'n_estimators': 100,
     'max_samples': 'auto',
@@ -20,28 +20,29 @@ ISOLATION_FOREST_PARAMS = {
 class UserModelManager:
     """
     Manages the lifecycle of user behavior models:
-    - Initial training
-    - Saving and loading models
+    - Storing feature data
+    - Training, saving, and loading models
     - Scoring new data
-    - Retraining with feedback
     """
 
-    def __init__(self, feature_names, user_data_dir: Path = USER_DATA_DIR):
+    def __init__(self, feature_names, user_data_dir: Path):
         """
         Initialize the model manager.
         
         Args:
-            user_data_dir: Directory where user data and models are stored
             feature_names: List of feature names used in the feature vector
+            user_data_dir: Directory where user data and models are stored
         """
         self.user_data_dir = user_data_dir
         self.feature_names = feature_names
 
-        # Parameters for the Isolation Forest model
         self.model_params = ISOLATION_FOREST_PARAMS.copy()
   
-        # Thresholds for training and retraining
+        # Diversity thresholds
         self.min_samples_for_training = 300
+        self.min_keyboard_samples = 60
+        self.min_mouse_samples = 200
+        self.min_scroll_samples = 60
         self.retraining_threshold = 500
  
     def _get_user_dir(self, profile_id) -> Path:
@@ -50,7 +51,7 @@ class UserModelManager:
         user_dir.mkdir(exist_ok=True, parents=True)
         return user_dir
     
-    def save_features(self, profile_id, feature_vector, is_retraining_sample=False):
+    def save_features(self, profile_id: str, feature_vector: np.ndarray, is_retraining_sample: bool = False) -> int:
         """
         Save a feature vector to a user's feature file or retraining pool.
         
@@ -63,259 +64,157 @@ class UserModelManager:
             Count of samples in the file that was updated
         """
         user_dir = self._get_user_dir(profile_id)
+        
+        features_file = user_dir / "retraining_pool.csv" if is_retraining_sample else user_dir / "features.csv"
 
-        # Determine which file to use
-        if is_retraining_sample:
-            features_file = user_dir / "retraining_pool.csv"
-        else:
-            features_file = user_dir / "features.csv"
-
-        # Prepare data for CSV
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        row_data = [timestamp] + feature_vector.tolist()
-        headers = ["timestamp"] + self.feature_names
-
-        # Check if file exists
         file_exists = features_file.exists()
-
         with open(features_file, mode='a', newline='') as file:
             writer = csv.writer(file)
             if not file_exists:
-                # Write headers if file is new
-                writer.writerow(headers)
-            # Write the feature data
-            writer.writerow(row_data)
+                writer.writerow(["timestamp"] + self.feature_names)
+            writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S")] + feature_vector.tolist())
 
-        # Count samples in the updated file
-        sample_count = self._count_samples(features_file)
-
-        # For initial training, check if we should train a model
-        if not is_retraining_sample:
-            if sample_count >= self.min_samples_for_training:
-                model_path = user_dir / "model.joblib"
-                if not model_path.exists():
-                    logger.info(f"Training initial model for user {profile_id} with {sample_count} samples")
-                    self.train_initial_model(profile_id)
-        else:
-            # For retraining samples, check if we need to retrain
-            if sample_count >= self.retraining_threshold:
-                logger.info(f"Retraining threshold reached for user {profile_id}. Triggering retraining.")
-                self.retrain_model(profile_id)
-
-        return sample_count
-
-    def _count_samples(self, file_path: Path):
-        """Count the number of samples in a CSV file."""
-        if not file_path.is_file():
-            return 0
-        
-        # Count lines in CSV (subtract 1 for header)
-        with open(file_path, 'r') as f:
-            return sum(1 for _ in f) - 1
-
-    def count_user_samples(self, profile_id):
-        """Count the number of training samples for a user."""
-        features_file = self._get_user_dir(profile_id) / "features.csv"
         return self._count_samples(features_file)
 
-    def count_retraining_samples(self, profile_id):
-        """Count the number of samples in the retraining pool for a user."""
-        retraining_file = self._get_user_dir(profile_id) / "retraining_pool.csv"
-        return self._count_samples(retraining_file)
+    def _count_samples(self, file_path: Path):
+        """Count the number of samples in a CSV file, ignoring the header."""
+        if not file_path.is_file():
+            return 0
+        with open(file_path, 'r') as f:
+            # Using max to handle empty files (which would be 0 - 1 = -1)
+            return max(0, sum(1 for _ in f) - 1)
+
+    def check_diversity(self, profile_id: str) -> dict:
+        """
+        Checks the diversity of the collected training data against thresholds.
+        
+        Returns:
+            A dictionary containing the current and required counts for each metric.
+        """
+        features_file = self._get_user_dir(profile_id) / "features.csv"
+        if not features_file.exists():
+            return {
+                "total_samples": {"current": 0, "required": self.min_samples_for_training},
+                "keyboard_samples": {"current": 0, "required": self.min_keyboard_samples},
+                "mouse_samples": {"current": 0, "required": self.min_mouse_samples},
+                "scroll_samples": {"current": 0, "required": self.min_scroll_samples},
+                "is_ready": False
+            }
+
+        df = pd.read_csv(features_file)
+        
+        # Feature names should match FEATURE_NAMES in api.py
+        keyboard_activity_col = "avg_dwell_time"
+        mouse_activity_col = "avg_mouse_speed"
+        scroll_activity_col = "avg_scroll_magnitude"
+
+        total = len(df)
+        keyboard = len(df[df[keyboard_activity_col] > 0])
+        mouse = len(df[df[mouse_activity_col] > 0])
+        scroll = len(df[df[scroll_activity_col] > 0])
+
+        is_ready = (
+            total >= self.min_samples_for_training and
+            keyboard >= self.min_keyboard_samples and
+            mouse >= self.min_mouse_samples and
+            scroll >= self.min_scroll_samples
+        )
+
+        return {
+            "total_samples": {"current": total, "required": self.min_samples_for_training},
+            "keyboard_samples": {"current": keyboard, "required": self.min_keyboard_samples},
+            "mouse_samples": {"current": mouse, "required": self.min_mouse_samples},
+            "scroll_samples": {"current": scroll, "required": self.min_scroll_samples},
+            "is_ready": is_ready
+        }
 
     def train_initial_model(self, profile_id):
         """
-        Train the initial model for a user.
-        
-        Returns:
-            True if training was successful, False otherwise
+        Train the initial model for a user as a background task.
         """
         user_dir = self._get_user_dir(profile_id)
         features_file = user_dir / "features.csv"
         model_path = user_dir / "model.joblib"
 
-        # Check if we have enough data
-        sample_count = self.count_user_samples(profile_id)
-        if sample_count < self.min_samples_for_training:
-            logger.warning(f"Not enough samples ({sample_count}) for user {profile_id}")
-            return False
-
         try:
-            # Load features from CSV (skip timestamp column)
             df = pd.read_csv(features_file)
-            features = df.drop('timestamp', axis=1)
+            features = df[self.feature_names] # Ensure correct column order
             
-            # Train the model
             logger.info(f"Training Isolation Forest model for user {profile_id} using {len(features)} samples")
             model = IsolationForest(**self.model_params)
             model.fit(features)
             
-            # Save the model
-            joblib.dump(model, model_path)
+            # Use a temporary file for atomic write
+            temp_model_path = model_path.with_suffix(".joblib.tmp")
+            joblib.dump(model, temp_model_path)
+            temp_model_path.rename(model_path)
+
             logger.info(f"Model saved to {model_path}")
-            
-            # Save metadata
-            metadata = {
-                "trained_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "samples_used": len(features),
-                "model_version": "1.0"
-            }
-            
-            with open(user_dir / "model_metadata.txt", "w") as f:
-                for key, value in metadata.items():
-                    f.write(f"{key}: {value}\n")
-            
             return True
         except Exception as e:
-            logger.error(f"Error training model for user {profile_id}: {e}")
+            logger.error(f"Error training model for user {profile_id}: {e}", exc_info=True)
             return False
         
     def retrain_model(self, profile_id):
         """
-        Retrain a user's model using both original and new data.
-        
-        Returns:
-            True if retraining was successful, False otherwise
+        Retrain a user's model as a background task.
         """
         user_dir = self._get_user_dir(profile_id)
         features_file = user_dir / "features.csv"
         retraining_file = user_dir / "retraining_pool.csv"
         model_path = user_dir / "model.joblib"
-        
-        # Check if both data sources exist
-        if not features_file.is_file():
-            logger.warning(f"Original training data not found for user {profile_id}")
+
+        if not features_file.is_file() or not retraining_file.is_file():
+            logger.warning("Missing data for retraining, aborting.")
             return False
-        
-        if not retraining_file.is_file():
-            logger.warning(f"No retraining data available for user {profile_id}")
-            return False
-        
+
         try:
-            # Load original training features
             original_df = pd.read_csv(features_file)
-            original_features = original_df.drop('timestamp', axis=1)
-            
-            # Load retraining features
             retraining_df = pd.read_csv(retraining_file)
-            retraining_features = retraining_df.drop('timestamp', axis=1)
             
-            # Combine datasets
-            combined_features = pd.concat([original_features, retraining_features])
+            combined_features = pd.concat([original_df[self.feature_names], retraining_df[self.feature_names]])
             
-            # Train new model
-            logger.info(f"Retraining model for user {profile_id} using {len(combined_features)} samples " +
-                        f"({len(original_features)} original + {len(retraining_features)} new)")
-            
+            logger.info(f"Retraining model for user {profile_id} using {len(combined_features)} samples.")
             model = IsolationForest(**self.model_params)
             model.fit(combined_features)
             
-            # Backup old model
-            if model_path.exists():
-                backup_path = user_dir / f"model_backup_{datetime.now().strftime('%Y%m%d%H%M%S')}.joblib"
-                model_path.rename(backup_path)
-                logger.info(f"Previous model backed up to {backup_path}")
-            
-            # Save new model
-            joblib.dump(model, model_path)
+            # Safe overwrite with a temporary file
+            temp_model_path = model_path.with_suffix(".joblib.tmp")
+            joblib.dump(model, temp_model_path)
+            temp_model_path.rename(model_path)
             logger.info(f"Retrained model saved to {model_path}")
             
-            # Update metadata
-            metadata = {
-                "trained_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "samples_used": len(combined_features),
-                "original_samples": len(original_features),
-                "retraining_samples": len(retraining_features),
-                "model_version": "2.0"  # Increment version for retrained models
-            }
-            
-            with open(user_dir / "model_metadata.txt", "w") as f:
-                for key, value in metadata.items():
-                    f.write(f"{key}: {value}\n")
-            
             # Clear retraining pool
-            with open(retraining_file, "w", newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(["timestamp"] + self.feature_names)
-            
+            retraining_file.write_text(f"timestamp,{','.join(self.feature_names)}\n")
             logger.info(f"Retraining pool cleared for user {profile_id}")
             
             return True
         except Exception as e:
-            logger.error(f"Error retraining model for user {profile_id}: {e}")
+            logger.error(f"Error retraining model for user {profile_id}: {e}", exc_info=True)
             return False
 
     def load_model(self, profile_id):
         """
-        Load the trained model for a user.
-        
-        Returns:
-            The loaded model or None if no model exists
+        Load a user's model.
         """
         model_path = self._get_user_dir(profile_id) / "model.joblib"
         if not model_path.exists():
             return None
-        
-        try:
-            model = joblib.load(model_path)
-            logger.info(f"Loaded model for user {profile_id}")
-            return model
-        except Exception as e:
-            logger.error(f"Error loading model for user {profile_id}: {e}")
-            return None
+        return joblib.load(model_path)
+
 
     def score(self, profile_id, feature_vector):
         """
-        Score a feature vector using the user's model.
-        
-        Args:
-            profile_id: User identifier
-            feature_vector: Numpy array of features
-            
-        Returns:
-            Dictionary with anomaly score and boolean flag
-            
-        Raises:
-            ValueError if model not found
+        Score new data for a user.
         """
         model = self.load_model(profile_id)
         if model is None:
             raise ValueError(f"No model exists for user {profile_id}")
         
-        # Get raw decision score
-        score = model.decision_function([feature_vector])[0]
+        # Reshape for single prediction
+        features_df = pd.DataFrame([feature_vector], columns=self.feature_names)
         
-        # Negative scores indicate anomalies
+        score = model.decision_function(features_df)[0]
         is_anomaly = score < 0
         
-        return {
-            "is_anomaly": bool(is_anomaly),
-            "score": float(score)
-        }
-    
-    def _get_model_metadata(self, profile_id):
-        """Get metadata about a user's model."""
-        metadata_file = self._get_user_dir(profile_id) / "model_metadata.txt"
-        metadata = {}
-        
-        if metadata_file.exists():
-            with open(metadata_file, 'r') as f:
-                for line in f:
-                    if ':' in line:
-                        key, value = line.strip().split(':', 1)
-                        metadata[key.strip()] = value.strip()
-        
-        return metadata
-        
-    def get_retraining_status(self, profile_id):
-        """Get status of the retraining process for a user."""
-        retraining_count = self.count_retraining_samples(profile_id)
-        metadata = self._get_model_metadata(profile_id)
-
-        return {
-            "profile_id": profile_id,
-            "retraining_samples": retraining_count,
-            "retraining_threshold": self.retraining_threshold,
-            "progress_percentage": (retraining_count / self.retraining_threshold) * 100 if self.retraining_threshold > 0 else 0,
-            "model_metadata": metadata
-        }
+        return {"is_anomaly": bool(is_anomaly), "score": float(score)}

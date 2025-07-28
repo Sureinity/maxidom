@@ -2,12 +2,12 @@
   "manifest_version": 3,
   "name": "MaxiDOM",
   "description": "MaxiDOM is a behavioral biometrics-based authentication layer for Chrome that detects unauthorized access of your profile.",
-  "version": "0.3.0",
-  "version_name": "0.3.0-dev.1",
+  "version": "0.4.0",
+  "version_name": "0.4.0-dev.1",
    "host_permissions": [
     "https://127.0.0.1:8000/"
   ],
-  "permissions": ["scripting", "tabs", "storage"],  // All of these permissions refer to the Chrome API (https://developer.chrome.com/docs/extensions/reference/api)
+  "permissions": ["scripting", "tabs", "storage"],
   "action": {
     "default_popup": "popups/popup.html",
     "default_title": "MaxiDOM"
@@ -15,7 +15,8 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["scripts/script.js"]
+      "js": ["scripts/script.js"],
+      "all_frames": false
     }
   ],
   "background": {

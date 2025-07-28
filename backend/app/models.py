@@ -31,8 +31,9 @@ class FocusChange(BaseModel):
     t: float
 
 # Aggregated payload model
+# The `profile_id` has been REMOVED from this model.
+# It will be passed exclusively as a URL path parameter.
 class Payload(BaseModel):
-    profile_id: str
     startTimestamp: float
     endTimestamp: float
     windowSize: WindowSize

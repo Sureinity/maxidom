@@ -1,214 +1,237 @@
-/***********************************************************************
-  SERVICE WORKER - CORE MESSAGE WORKFLOW OVERVIEW
-
-  Handles incoming messages from content scripts, manages profiling vs.
-  detection logic, interacts with local storage, and communicates with
-  the backend server.
-
-  Step 1: Log the raw message payload as it arrives.
-  Step 2: Retrieve the profile's unique ID from storage.
-  Step 3: Get the current system state.
-  Step 4: Prepare the final payload for the backend.
-  Step 5: Determine which API endpoint to use based on system state.
-  Step 6: Process the response based on system state (profiling or detection).
-***********************************************************************/
-
 import {
   ENDPOINTS,
-  PROFILING_SAMPLE_THRESHOLD,
-  checkPhaseTransition,
   getProfileUUID,
   getSystemState,
-  getSampleCount,
-  getModelStatus,
-  updateSampleCount,
-  updateModelStatus,
+  setSystemState,
+  setProfilingProgress,
 } from "./utils/helpers.js";
 
-// ON INSTALL: Generate and store a unique identifier for this browser profile.
-// This runs only once when the extension is installed or updated.
-chrome.runtime.onInstalled.addListener(async (details) => {
-  console.log("--- Extension Installation/Update ---");
-  // Check if a UUID already exists.
+// Hybrid Model Constants
+const INACTIVITY_TIMEOUT_MS = 5000;    // Primary trigger: End session after 5s of no activity.
+const MAX_SESSION_DURATION_MS = 90000; // Safety Net 1: Force end session after 90s.
+const MAX_EVENT_COUNT = 2000;          // Safety Net 2: Force end session after 2000 events.
+const MINIMUM_EVENTS_THRESHOLD = 20;   // Noise Reduction: Discard sessions with too few events.
+
+// Global State
+let sessionData = {};
+let inactivityTimeout = null;
+let mouseMoveTimeout = null;
+let keyDownMap = new Map();
+let mousedownEvent = null;
+
+// Core Functions
+function resetSessionData() {
+  clearTimeout(inactivityTimeout); 
+  inactivityTimeout = null;
+  sessionData = {
+    startTimestamp: null,
+    endTimestamp: null,
+    windowSize: { width: 0, height: 0 },
+    keyEvents: [],
+    mousePaths: [],
+    clicks: [],
+    scrollEvents: [],
+    focusChanges: [],
+  };
+  keyDownMap.clear();
+  mousedownEvent = null;
+  if (sessionData.currentMousePath) {
+    delete sessionData.currentMousePath;
+  }
+}
+resetSessionData(); 
+
+function checkAndSetStartTimestamp(timestamp) {
+  if (!sessionData.startTimestamp) {
+    sessionData.startTimestamp = timestamp;
+  }
+}
+
+async function finalizeAndSendSession() {
+  if (!sessionData.startTimestamp) {
+    return; 
+  }
+
+  // Prevent multiple triggers
+  if (inactivityTimeout) clearTimeout(inactivityTimeout);
+  inactivityTimeout = null;
+  
+  sessionData.endTimestamp = performance.now();
+
+  // Finalize any pending mouse path
+  if (sessionData.currentMousePath && sessionData.currentMousePath.length > 0) {
+    sessionData.mousePaths.push(sessionData.currentMousePath);
+    delete sessionData.currentMousePath;
+  }
+
+  // Noise reduction check
+  const totalEvents = sessionData.keyEvents.length + sessionData.clicks.length + sessionData.mousePaths.length + sessionData.scrollEvents.length;
+  if (totalEvents < MINIMUM_EVENTS_THRESHOLD) {
+    console.log(`Session ended with only ${totalEvents} events. Discarding as noise.`);
+    resetSessionData();
+    return;
+  }
+
+  console.log("Session finalized. Preparing to send aggregated data:", sessionData);
+  
+  try {
+    await handleDataPayload(sessionData);
+  } catch(error) {
+    console.error("Failed to handle data payload:", error);
+  } finally {
+    // IMPORTANT: Reset for the next session regardless of success or failure
+    resetSessionData();
+  }
+}
+
+// On Installation
+chrome.runtime.onInstalled.addListener(async () => {
   const existingUUID = await getProfileUUID();
   if (!existingUUID) {
-    // If not, generate a new one and store it.
     const newUUID = crypto.randomUUID();
     await chrome.storage.local.set({ profile_uuid: newUUID });
-    console.log("New profile UUID created and stored:", newUUID);
+    await setSystemState("profiling");
+    console.log("New profile UUID created. System state: profiling.", newUUID);
   } else {
     console.log("Existing profile UUID confirmed:", existingUUID);
   }
-  console.log("-------------------------------------");
 });
 
-// ON MESSAGE: Listen for aggregated data from the content script.
-chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-  if (message.type === "AGGREGATED_USER_EVENTS") {
-    try {
-      const uuid = await getProfileUUID();
-      const state = await getSystemState();
-      let response = null;
-      let endpoint = null;
-
-      const payload = {
-        profile_id: uuid,
-        ...message.payload,
-      };
-
-      if (state === "profiling") {
-        // Profiling phase
-        endpoint = ENDPOINTS.TRAIN(uuid);
-
-        try {
-          response = await fetch(endpoint, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload),
-          });
-
-          if (response.ok) {
-            const data = await response.json();
-            await updateSampleCount(data.samples_collected);
-            console.log(
-              `Total samples collected: ${data.samples_collected}/${PROFILING_SAMPLE_THRESHOLD}`,
-            );
-
-            if (data.samples_collected >= PROFILING_SAMPLE_THRESHOLD) {
-              endpoint = ENDPOINTS.SCORE(uuid);
-
-              try {
-                const modelCheckResponse = await fetch(endpoint, {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                  },
-                  body: JSON.stringify(payload),
-                });
-
-                if (modelCheckResponse.ok) {
-                  // Model exists and is ready
-                  console.log("Model is trained and ready!");
-                  await updateModelStatus(true);
-
-                  // Evaluate condition for entering detection phase
-                  const newState = await checkPhaseTransition(
-                    data.samples_collected,
-                    true,
-                  );
-                  if (newState !== state) {
-                    console.log(
-                      `System state changed: ${state} -> ${newState}`,
-                    );
-                  }
-                } else {
-                  // Model not ready yet, stay in profiling
-                  console.log("Model is not ready yet, continuing profiling");
-                  await updateModelStatus(false); // Defensive programming
-                }
-              } catch (error) {
-                console.error("Error checking model status:", error);
-              }
-            }
-          }
-        } catch (error) {
-          console.error("Error sending data to training endpoint:", error);
-        }
-      } else {
-        // Detection phase: Logical side
-        endpoint = ENDPOINTS.SCORE(uuid);
-
-        try {
-          console.log(`Sending data to detection endpoint: ${endpoint}`);
-          response = await fetch(endpoint, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload),
-          });
-
-          // Handle 404 error (model not found) by switching back to profiling
-          if (response.status === 404) {
-            console.warn(
-              "Model not found for this user. Switching back to profiling mode.",
-            );
-            await chrome.storage.local.set({
-              system_state: "profiling",
-              sample_count: 0, // Reset sample count
-              model_trained: false, // Reset model status
-            });
-
-            // Try again with training endpoint
-            endpoint = ENDPOINTS.TRAIN(uuid);
-            console.log("Retrying with training endpoint");
-            response = await fetch(endpoint, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify(payload),
-            });
-
-            if (response.ok) {
-              const data = await response.json();
-              if (data.samples_collected !== undefined) {
-                await updateSampleCount(data.samples_collected);
-              }
-            }
-          }
-        } catch (error) {
-          console.error("Error in detection phase:", error);
-          // Try with training endpoint as a fallback
-          console.log("Falling back to training endpoint");
-          response = await fetch(`http://127.0.0.1:8000/api/train/${uuid}`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload),
-          });
-        }
-      }
-
-      // HTTP Errors handling
-      if (!response || !response.ok) {
-        throw new Error(
-          `HTTP error! Status: ${response ? response.status : "No response"}`,
-        );
-      }
-
-      // General API response processing
-      const data = await response.json();
-      console.log(data.status);
-      console.log(`Backend response: ${data}`);
-
-      if (state === "detection" && data.is_anomaly !== undefined) {
-        if (data.is_anomaly) {
-          // In detection mode, check for anomalies
-          console.warn(
-            "⚠️ ANOMALY DETECTED! This may not be the profile owner.",
-          );
-        } else {
-          console.log("Normal behavior detected. Continuing sessions.");
-        }
-      } else if (state === "profiling") {
-        // In profiling mode, just log the progress
-        const count = data.samples_collected || (await getSampleCount());
-        console.log(
-          `Profiling in progress: ${count}/${PROFILING_SAMPLE_THRESHOLD} samples collected`,
-        );
-      }
-
-      sendResponse({ status: "success", received: data });
-      console.log("---------------------------------------------------------");
-    } catch (error) {
-      console.error("Error during payload processing:", error);
-      console.log("---------------------------------------------------------");
-      sendResponse({ status: "error", message: error.message });
-    }
-    return true;
+// Central Message Listener for Raw Events
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "RAW_EVENT") {
+    handleRawEvent(message.payload);
   }
 });
+
+// Event Aggregation Logic
+function handleRawEvent(event) {
+  checkAndSetStartTimestamp(event.t);
+
+  // For every event, reset the inactivity timer. This keeps the session alive.
+  clearTimeout(inactivityTimeout);
+  inactivityTimeout = setTimeout(finalizeAndSendSession, INACTIVITY_TIMEOUT_MS);
+
+  // Check safety nets
+  const sessionDuration = event.t - (sessionData.startTimestamp || event.t);
+  const roughEventCount = (sessionData.keyEvents?.length || 0) + (sessionData.clicks?.length || 0) + (sessionData.mousePaths?.length || 0) + (sessionData.scrollEvents?.length || 0);
+
+  if (sessionDuration > MAX_SESSION_DURATION_MS || roughEventCount > MAX_EVENT_COUNT) {
+    console.log("Safety net triggered (max duration or event count). Finalizing session.");
+    finalizeAndSendSession().then(() => {
+        // After finalizing, process the current event for the *new* session
+        handleRawEvent(event);
+    });
+    return; 
+  }
+
+  switch (event.eventType) {
+    case "mousemove":
+      if (!sessionData.currentMousePath) sessionData.currentMousePath = [];
+      sessionData.currentMousePath.push({ t: event.t, x: event.x, y: event.y });
+      clearTimeout(mouseMoveTimeout);
+      mouseMoveTimeout = setTimeout(() => {
+        if (sessionData.currentMousePath?.length > 0) {
+          sessionData.mousePaths.push([...sessionData.currentMousePath]);
+          delete sessionData.currentMousePath;
+        }
+      }, 200);
+      break;
+    case "keydown":
+      keyDownMap.set(event.code, event.t);
+      break;
+    case "keyup":
+      const downTime = keyDownMap.get(event.code);
+      if (downTime) {
+        sessionData.keyEvents.push({ code: event.code, downTime, upTime: event.t });
+        keyDownMap.delete(event.code);
+      }
+      break;
+    case "mousedown":
+      mousedownEvent = { t: event.t, x: event.x, y: event.y, button: event.button };
+      break;
+    case "mouseup":
+      if (mousedownEvent) {
+        sessionData.clicks.push({ ...mousedownEvent, duration: event.t - mousedownEvent.t });
+        mousedownEvent = null;
+      }
+      break;
+    case "wheel":
+      sessionData.scrollEvents.push({ t: event.t, dy: event.dy });
+      break;
+    case "focus":
+    case "blur":
+      sessionData.focusChanges.push({ type: event.eventType, t: event.t });
+      break;
+    case "resize":
+      sessionData.windowSize = { width: event.width, height: event.height };
+      break;
+  }
+}
+
+// Payload Handling and API Logic
+async function handleDataPayload(payload) {
+  const uuid = await getProfileUUID();
+  if (!uuid) throw new Error("Profile UUID not found.");
+
+  const completePayload = { ...payload, userId: uuid };
+  const state = await getSystemState();
+
+  if (state === "profiling") {
+    await handleProfiling(ENDPOINTS.TRAIN(uuid), completePayload);
+  } else {
+    await handleDetection(ENDPOINTS.SCORE(uuid), completePayload, uuid);
+  }
+}
+
+async function handleProfiling(endpoint, payload) {
+  console.log("State: PROFILING. Sending data to /train endpoint.");
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+    
+    const data = await response.json();
+    await setProfilingProgress(data.progress);
+    console.log("Profiling progress updated:", data.progress);
+
+    // Hardened State Transition: Trust the backend's `is_ready` flag.
+    if (data.progress.is_ready) {
+      console.log("Diversity conditions met. Transitioning to DETECTION state.");
+      await setSystemState("detection");
+    }
+  } catch (error) {
+    console.error("Error during profiling data submission:", error);
+  }
+}
+
+async function handleDetection(endpoint, payload, uuid) {
+  console.log("State: DETECTION. Sending data to /score endpoint.");
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (response.status === 404) {
+      console.warn("Model not found (404). Resetting to PROFILING state.");
+      await setSystemState("profiling");
+      await handleProfiling(ENDPOINTS.TRAIN(uuid), payload);
+      return;
+    }
+    if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+
+    const data = await response.json();
+    if (data.is_anomaly) {
+      console.warn("⚠️ ANOMALY DETECTED!", data);
+    } else {
+      console.log("Normal behavior detected.", data);
+    }
+  } catch (error) {
+    console.error("Error during detection data submission:", error);
+  }
+}
