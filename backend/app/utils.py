@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 ISOLATION_FOREST_PARAMS = {
     'n_estimators': 100,
     'max_samples': 'auto',
-    'contamination': 'auto',
+    'contamination': 0.10, # TESTING: 10% of the data is considered outliers
     'random_state': 42
 }
 
