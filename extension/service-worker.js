@@ -101,8 +101,25 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "RAW_EVENT") {
     handleRawEvent(message.payload);
+  } else if (message.type === "REQUEST_PROFILING_STATUS") {
+    handleProfilingStatusRequest(sendResponse);
+    return true; // Indicates an asynchronous response
   }
 });
+
+// New function to handle the request for profiling status
+async function handleProfilingStatusRequest(sendResponse) {
+  const profile_uuid = await getProfileUUID();
+  const system_state = await getSystemState();
+  const profiling_progress_data = await chrome.storage.local.get("profiling_progress");
+  const profiling_progress = profiling_progress_data.profiling_progress || {};
+
+  sendResponse({
+    profile_uuid,
+    system_state,
+    profiling_progress,
+  });
+}
 
 // Event Aggregation Logic
 function handleRawEvent(event) {
