@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 import joblib
 import logging
+import json # NEW: Import the json library
 
 logger = logging.getLogger(__name__)
 
@@ -13,14 +14,14 @@ logger = logging.getLogger(__name__)
 ISOLATION_FOREST_PARAMS = {
     'n_estimators': 100,
     'max_samples': 'auto',
-    'contamination': 0.10, # TESTING: 10% of the data is considered outliers
+    'contamination': 0.10, # TEST: 10% of the data is considered outliers
     'random_state': 42
 }
 
 class UserModelManager:
     """
     Manages the lifecycle of user behavior models:
-    - Storing feature data
+    - Storing raw payloads and feature data
     - Training, saving, and loading models
     - Scoring new data
     """
@@ -35,7 +36,6 @@ class UserModelManager:
         """
         self.user_data_dir = user_data_dir
         self.feature_names = feature_names
-
         self.model_params = ISOLATION_FOREST_PARAMS.copy()
   
         # Diversity thresholds
@@ -51,6 +51,30 @@ class UserModelManager:
         user_dir.mkdir(exist_ok=True, parents=True)
         return user_dir
     
+    # TEST: Method to save the raw JSON payload
+    def save_raw_payload(self, profile_id: str, payload_dict: dict, is_retraining_sample: bool = False):
+        """
+        Saves the complete raw JSON payload to a .jsonl file for archival and debugging.
+        
+        Args:
+            profile_id: User identifier
+            payload_dict: The raw payload as a dictionary
+            is_retraining_sample: If True, save to the retraining raw data file
+        """
+        user_dir = self._get_user_dir(profile_id)
+        raw_data_dir = user_dir / "raw_data"
+        raw_data_dir.mkdir(exist_ok=True)
+        
+        target_file = raw_data_dir / "retraining_raw.jsonl" if is_retraining_sample else raw_data_dir / "profiling_raw.jsonl"
+        
+        try:
+            # Append the JSON object as a new line in the file
+            with open(target_file, 'a') as f:
+                f.write(json.dumps(payload_dict) + '\n')
+            logger.info(f"Raw payload saved to {target_file}")
+        except Exception as e:
+            logger.error(f"Failed to save raw payload for {profile_id}: {e}")
+
     def save_features(self, profile_id: str, feature_vector: np.ndarray, is_retraining_sample: bool = False) -> int:
         """
         Save a feature vector to a user's feature file or retraining pool.
@@ -81,7 +105,6 @@ class UserModelManager:
         if not file_path.is_file():
             return 0
         with open(file_path, 'r') as f:
-            # Using max to handle empty files (which would be 0 - 1 = -1)
             return max(0, sum(1 for _ in f) - 1)
 
     def check_diversity(self, profile_id: str) -> dict:
@@ -103,7 +126,6 @@ class UserModelManager:
 
         df = pd.read_csv(features_file)
         
-        # Feature names should match FEATURE_NAMES in api.py
         keyboard_activity_col = "avg_dwell_time"
         mouse_activity_col = "avg_mouse_speed"
         scroll_activity_col = "avg_scroll_magnitude"
@@ -129,22 +151,19 @@ class UserModelManager:
         }
 
     def train_initial_model(self, profile_id):
-        """
-        Train the initial model for a user as a background task.
-        """
+        """Train the initial model for a user as a background task."""
         user_dir = self._get_user_dir(profile_id)
         features_file = user_dir / "features.csv"
         model_path = user_dir / "model.joblib"
 
         try:
             df = pd.read_csv(features_file)
-            features = df[self.feature_names] # Ensure correct column order
+            features = df[self.feature_names]
             
             logger.info(f"Training Isolation Forest model for user {profile_id} using {len(features)} samples")
             model = IsolationForest(**self.model_params)
             model.fit(features)
             
-            # Use a temporary file for atomic write
             temp_model_path = model_path.with_suffix(".joblib.tmp")
             joblib.dump(model, temp_model_path)
             temp_model_path.rename(model_path)
@@ -156,9 +175,7 @@ class UserModelManager:
             return False
         
     def retrain_model(self, profile_id):
-        """
-        Retrain a user's model as a background task.
-        """
+        """Retrain a user's model as a background task."""
         user_dir = self._get_user_dir(profile_id)
         features_file = user_dir / "features.csv"
         retraining_file = user_dir / "retraining_pool.csv"
@@ -178,13 +195,11 @@ class UserModelManager:
             model = IsolationForest(**self.model_params)
             model.fit(combined_features)
             
-            # Safe overwrite with a temporary file
             temp_model_path = model_path.with_suffix(".joblib.tmp")
             joblib.dump(model, temp_model_path)
             temp_model_path.rename(model_path)
             logger.info(f"Retrained model saved to {model_path}")
             
-            # Clear retraining pool
             retraining_file.write_text(f"timestamp,{','.join(self.feature_names)}\n")
             logger.info(f"Retraining pool cleared for user {profile_id}")
             
@@ -194,9 +209,7 @@ class UserModelManager:
             return False
 
     def load_model(self, profile_id):
-        """
-        Load a user's model.
-        """
+        """Load a user's model."""
         model_path = self._get_user_dir(profile_id) / "model.joblib"
         if not model_path.exists():
             return None
@@ -204,14 +217,11 @@ class UserModelManager:
 
 
     def score(self, profile_id, feature_vector):
-        """
-        Score new data for a user.
-        """
+        """Score new data for a user."""
         model = self.load_model(profile_id)
         if model is None:
             raise ValueError(f"No model exists for user {profile_id}")
         
-        # Reshape for single prediction
         features_df = pd.DataFrame([feature_vector], columns=self.feature_names)
         
         score = model.decision_function(features_df)[0]

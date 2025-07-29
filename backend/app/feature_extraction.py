@@ -1,5 +1,3 @@
-# --- feature_extraction.py ---
-
 import numpy as np
 from typing import Dict, List, Any
 import math

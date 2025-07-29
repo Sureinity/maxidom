@@ -34,21 +34,22 @@ app.add_middleware(
 USER_DATA_DIR  = Path(__file__).resolve().parent / "user_data"
 USER_DATA_DIR.mkdir(exist_ok=True)
 
-# Get the definitive list of feature names directly from the extractor
 FEATURE_NAMES = feature_extractor.get_feature_names()
-
 model_manager = UserModelManager(FEATURE_NAMES, USER_DATA_DIR)
 
 # API Endpoints
 @app.post("/api/train/{profile_id}")
 def user_data(profile_id: str, payload: Payload, background_tasks: BackgroundTasks):
     payload_dict = payload.dict()
+    
+    # TEST: Save the raw payload first for profiling
+    model_manager.save_raw_payload(profile_id, payload_dict, is_retraining_sample=False)
+    
     feature_vector = feature_extractor.extract_features(payload_dict)
     
     model_manager.save_features(profile_id, feature_vector)
     diversity_status = model_manager.check_diversity(profile_id)
     
-    # Use the is_ready flag to trigger background training
     if diversity_status.get("is_ready") and not model_manager.load_model(profile_id):
         logger.info(f"Diversity threshold met for {profile_id}. Scheduling initial training.")
         background_tasks.add_task(model_manager.train_initial_model, profile_id)
@@ -69,8 +70,9 @@ def score_user_data(profile_id: str, payload: Payload, background_tasks: Backgro
     try:
         result = model_manager.score(profile_id, feature_vector)
         
-        # If behavior is normal, add to retraining pool
         if not result["is_anomaly"]:
+                # TEST: If behavior is normal, save both the raw payload and features for potential retraining
+            model_manager.save_raw_payload(profile_id, payload_dict, is_retraining_sample=True)
             pool_size = model_manager.save_features(profile_id, feature_vector, is_retraining_sample=True)
             logger.info(f"Normal sample saved for {profile_id}. Retraining pool size: {pool_size}")
             
