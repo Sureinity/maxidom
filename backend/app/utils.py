@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 import joblib
 import logging
-import json # NEW: Import the json library
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 ISOLATION_FOREST_PARAMS = {
     'n_estimators': 100,
     'max_samples': 'auto',
-    'contamination': 0.10, # TEST: 10% of the data is considered outliers
+    'contamination': 'auto',
     'random_state': 42
 }
 
@@ -40,9 +40,8 @@ class UserModelManager:
   
         # Diversity thresholds
         self.min_samples_for_training = 300
-        self.min_keyboard_samples = 60
-        self.min_mouse_samples = 200
-        self.min_scroll_samples = 60
+        self.min_keyboard_samples = 50 
+        self.min_mouse_samples = 150 
         self.retraining_threshold = 500
  
     def _get_user_dir(self, profile_id) -> Path:
@@ -51,15 +50,9 @@ class UserModelManager:
         user_dir.mkdir(exist_ok=True, parents=True)
         return user_dir
     
-    # TEST: Method to save the raw JSON payload
     def save_raw_payload(self, profile_id: str, payload_dict: dict, is_retraining_sample: bool = False):
         """
         Saves the complete raw JSON payload to a .jsonl file for archival and debugging.
-        
-        Args:
-            profile_id: User identifier
-            payload_dict: The raw payload as a dictionary
-            is_retraining_sample: If True, save to the retraining raw data file
         """
         user_dir = self._get_user_dir(profile_id)
         raw_data_dir = user_dir / "raw_data"
@@ -68,7 +61,6 @@ class UserModelManager:
         target_file = raw_data_dir / "retraining_raw.jsonl" if is_retraining_sample else raw_data_dir / "profiling_raw.jsonl"
         
         try:
-            # Append the JSON object as a new line in the file
             with open(target_file, 'a') as f:
                 f.write(json.dumps(payload_dict) + '\n')
             logger.info(f"Raw payload saved to {target_file}")
@@ -78,14 +70,6 @@ class UserModelManager:
     def save_features(self, profile_id: str, feature_vector: np.ndarray, is_retraining_sample: bool = False) -> int:
         """
         Save a feature vector to a user's feature file or retraining pool.
-        
-        Args:
-            profile_id: User identifier
-            feature_vector: Numpy array of features
-            is_retraining_sample: If True, save to retraining pool
-            
-        Returns:
-            Count of samples in the file that was updated
         """
         user_dir = self._get_user_dir(profile_id)
         
@@ -110,9 +94,6 @@ class UserModelManager:
     def check_diversity(self, profile_id: str) -> dict:
         """
         Checks the diversity of the collected training data against thresholds.
-        
-        Returns:
-            A dictionary containing the current and required counts for each metric.
         """
         features_file = self._get_user_dir(profile_id) / "features.csv"
         if not features_file.exists():
@@ -120,33 +101,28 @@ class UserModelManager:
                 "total_samples": {"current": 0, "required": self.min_samples_for_training},
                 "keyboard_samples": {"current": 0, "required": self.min_keyboard_samples},
                 "mouse_samples": {"current": 0, "required": self.min_mouse_samples},
-                "scroll_samples": {"current": 0, "required": self.min_scroll_samples},
                 "is_ready": False
             }
 
         df = pd.read_csv(features_file)
         
-        keyboard_activity_col = "avg_dwell_time"
+        keyboard_activity_col = "avg_dwell_time_alpha" 
         mouse_activity_col = "avg_mouse_speed"
-        scroll_activity_col = "avg_scroll_magnitude"
 
         total = len(df)
         keyboard = len(df[df[keyboard_activity_col] > 0])
         mouse = len(df[df[mouse_activity_col] > 0])
-        scroll = len(df[df[scroll_activity_col] > 0])
 
         is_ready = (
             total >= self.min_samples_for_training and
             keyboard >= self.min_keyboard_samples and
-            mouse >= self.min_mouse_samples and
-            scroll >= self.min_scroll_samples
+            mouse >= self.min_mouse_samples
         )
 
         return {
             "total_samples": {"current": total, "required": self.min_samples_for_training},
             "keyboard_samples": {"current": keyboard, "required": self.min_keyboard_samples},
             "mouse_samples": {"current": mouse, "required": self.min_mouse_samples},
-            "scroll_samples": {"current": scroll, "required": self.min_scroll_samples},
             "is_ready": is_ready
         }
 
@@ -214,7 +190,6 @@ class UserModelManager:
         if not model_path.exists():
             return None
         return joblib.load(model_path)
-
 
     def score(self, profile_id, feature_vector):
         """Score new data for a user."""
