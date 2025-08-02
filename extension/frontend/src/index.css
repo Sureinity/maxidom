@@ -1,0 +1,9 @@
+@import "tailwindcss";
+@plugin "daisyui";
+ @plugin "daisyui" {
+   themes: all;
+ }
+
+ *{
+  font-family: "Jost", sans-serif;
+ }
