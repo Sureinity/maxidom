@@ -9,7 +9,7 @@
   ],
   "permissions": ["scripting", "tabs", "storage"],
   "action": {
-    "default_popup": "popups/popup.html",
+    "default_popup": "frontend/dist/index.html",
     "default_title": "MaxiDOM"
   },
   "content_scripts": [
