@@ -22,10 +22,6 @@ class Click(BaseModel):
     button: int
     duration: float
 
-class ScrollEvent(BaseModel):
-    t: float
-    dy: float
-
 class FocusChange(BaseModel):
     type: Literal["focus", "blur"]
     t: float
@@ -40,5 +36,4 @@ class Payload(BaseModel):
     keyEvents: List[KeyEvent]
     mousePaths: List[List[MousePoint]]
     clicks: List[Click]
-    scrollEvents: List[ScrollEvent]
     focusChanges: List[FocusChange]
