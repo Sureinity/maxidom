@@ -90,22 +90,6 @@ document.addEventListener(
   true,
 );
 
-// Scroll Behavior
-document.addEventListener(
-  "wheel",
-  (event) => {
-    chrome.runtime.sendMessage({
-      type: "RAW_EVENT",
-      payload: {
-        eventType: "wheel",
-        t: performance.now(),
-        dy: event.deltaY,
-      },
-    });
-  },
-  { passive: true, capture: true },
-);
-
 // Window Focus/Blur
 window.addEventListener("focus", () => {
   chrome.runtime.sendMessage({
@@ -132,3 +116,14 @@ window.addEventListener("resize", () => {
     },
   });
 });
+
+// Heartbeat Listener for Activity Detection
+// This listener's ONLY purpose is to tell the service worker that the user
+// is active (e.g., reading an article and scrolling). It sends no scroll data.
+document.addEventListener(
+  "wheel",
+  () => {
+    chrome.runtime.sendMessage({ type: "HEARTBEAT" });
+  },
+  { passive: true, capture: true },
+);
