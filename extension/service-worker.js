@@ -20,6 +20,9 @@ let mouseMoveTimeout = null;
 let keyDownMap = new Map();
 let mousedownEvent = null;
 
+// New state lock to prevent race conditions during session finalization.
+let isFinalizing = false;
+
 // Core Session Management Functions
 function resetSessionData() {
   clearTimeout(inactivityTimeout);
@@ -51,23 +54,26 @@ function checkAndSetStartTimestamp(timestamp) {
 }
 
 async function finalizeAndSendSession() {
-  if (!sessionData.startTimestamp) {
-    return; // Nothing to send
+  // Check the lock and ensure there's data to send.
+  if (isFinalizing || !sessionData.startTimestamp) {
+    return;
   }
 
-  // Prevent multiple overlapping triggers
+  // Set the lock to prevent new events from being processed.
+  isFinalizing = true;
+
   if (inactivityTimeout) clearTimeout(inactivityTimeout);
   inactivityTimeout = null;
 
   sessionData.endTimestamp = performance.now();
 
-  // Finalize any pending mouse path before sending
+  // Finalize any pending mouse path before sending.
   if (sessionData.currentMousePath && sessionData.currentMousePath.length > 0) {
     sessionData.mousePaths.push([...sessionData.currentMousePath]);
     delete sessionData.currentMousePath;
   }
 
-  // Noise reduction: Ensure the session has meaningful biometric data
+  // Noise reduction: Ensure the session has meaningful biometric data.
   const totalMeaningfulEvents =
     sessionData.keyEvents.length +
     sessionData.clicks.length +
@@ -77,21 +83,31 @@ async function finalizeAndSendSession() {
       `Session ended with only ${totalMeaningfulEvents} meaningful events. Discarding as noise.`,
     );
     resetSessionData();
+    // Release the lock before returning.
+    isFinalizing = false;
     return;
   }
 
+  // Create a deep copy of the data to send. This allows us to reset the global state
+  // immediately, allowing the next session to begin collecting cleanly.
+  const dataToSend = JSON.parse(JSON.stringify(sessionData));
+
+  // Reset the global session immediately.
+  resetSessionData();
+
   console.log(
     "Session finalized. Preparing to send aggregated data:",
-    sessionData,
+    dataToSend,
   );
 
   try {
-    await handleDataPayload(sessionData);
+    // Send the copied data, not the global state.
+    await handleDataPayload(dataToSend);
   } catch (error) {
     console.error("Failed to handle data payload:", error);
   } finally {
-    // IMPORTANT: Reset for the next session regardless of success or failure
-    resetSessionData();
+    // IMPORTANT: Release the lock after the entire process is complete.
+    isFinalizing = false;
   }
 }
 
@@ -113,6 +129,12 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 // Central Message Listener: The router for all incoming data from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // If a session is currently being finalized and sent, drop incoming events.
+  // This is a small, acceptable data loss that prevents state corruption and data duplication.
+  if (isFinalizing) {
+    return;
+  }
+
   if (message.type === "RAW_EVENT") {
     handleRawEvent(message.payload);
   } else if (message.type === "HEARTBEAT") {
@@ -170,11 +192,10 @@ function handleRawEvent(event) {
     console.log(
       "Safety net triggered (max duration or event count). Finalizing session.",
     );
-    finalizeAndSendSession().then(() => {
-      // After finalizing, re-process the current event for the *new* session
-      handleRawEvent(event);
-    });
-    return; // Stop processing in the current (now finalized) session
+    // The async .then() pattern is removed. We simply call the finalize function.
+    // The state lock will handle concurrency safely.
+    finalizeAndSendSession();
+    return; // Stop processing the current event; it will belong to the next session.
   }
 
   switch (event.eventType) {
@@ -236,7 +257,6 @@ function handleRawEvent(event) {
 }
 
 // API Logic
-
 async function handleDataPayload(payload) {
   const uuid = await getProfileUUID();
   if (!uuid) throw new Error("Profile UUID not found.");
@@ -288,6 +308,7 @@ async function handleDetection(endpoint, payload, uuid) {
     if (response.status === 404) {
       console.warn("Model not found (404). Resetting to PROFILING state.");
       await setSystemState("profiling");
+      // Resubmit the current payload to the train endpoint to avoid data loss
       await handleProfiling(ENDPOINTS.TRAIN(uuid), payload);
       return;
     }
@@ -304,4 +325,3 @@ async function handleDetection(endpoint, payload, uuid) {
     console.error("Error during detection data submission:", error);
   }
 }
-
