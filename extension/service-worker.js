@@ -88,8 +88,6 @@ async function finalizeAndSendSession() {
     return;
   }
 
-  // Create a deep copy of the data to send. This allows us to reset the global state
-  // immediately, allowing the next session to begin collecting cleanly.
   const dataToSend = JSON.parse(JSON.stringify(sessionData));
 
   // Reset the global session immediately.
@@ -101,7 +99,6 @@ async function finalizeAndSendSession() {
   );
 
   try {
-    // Send the copied data, not the global state.
     await handleDataPayload(dataToSend);
   } catch (error) {
     console.error("Failed to handle data payload:", error);
@@ -129,21 +126,23 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 // Central Message Listener: The router for all incoming data from content scripts
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-  // If the system is in a lockdown state, it only listens for the verification trigger.
   const currentState = await getSystemState();
+
+  // If the system is in lockdown, it has a separate, focused set of listeners.
   if (currentState === "awaiting_verification") {
     if (message.type === "VERIFY_BUTTON_CLICKED") {
       console.log("Verification process initiated by user.");
-      // For now, this is a placeholder. It resets the system to normal.
-      // In the future, this will open the password prompt.
       await setSystemState("detection");
       await broadcastToTabs({ action: "HIDE_OVERLAY" });
     }
-    // Ignore all other messages (RAW_EVENT, HEARTBEAT) during lockdown.
-    return;
+    // New tabs will announce their readiness. Check if they need an overlay.
+    if (message.type === "CONTENT_SCRIPT_READY") {
+      await handleContentScriptReady(sender);
+    }
+    return; // Ignore all other messages during lockdown.
   }
 
-  // If a session is currently being finalized and sent, drop incoming events to prevent state corruption.
+  // If a session is currently being finalized, drop incoming events to prevent state corruption.
   if (isFinalizing) {
     return;
   }
@@ -155,25 +154,44 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
   } else if (message.type === "REQUEST_PROFILING_STATUS") {
     handleProfilingStatusRequest(sendResponse);
     return true; // Indicates an asynchronous response will be sent
+  } else if (message.type === "CONTENT_SCRIPT_READY") {
+    // This handles the case where a tab loads when not in lockdown.
+    await handleContentScriptReady(sender);
   }
 });
 
 // Event Handlers
 async function broadcastToTabs(message) {
-  // Query for all tabs in the current window to show the overlay everywhere.
+  // Query for all tabs across all normal windows.
   const tabs = await chrome.tabs.query({ windowType: "normal" });
   for (const tab of tabs) {
     try {
-      // We don't need to check if it's active, just send to all.
-      // The content script will handle not injecting duplicates.
       await chrome.tabs.sendMessage(tab.id, message);
     } catch (error) {
-      // This error is expected for tabs that don't have the content script injected (e.g., chrome:// pages)
+      // This error is expected for tabs that don't have the content script injected (e.g., chrome:// pages).
       if (!error.message.includes("Receiving end does not exist")) {
         console.warn(
           `Could not send message to tab ${tab.id}: ${error.message}`,
         );
       }
+    }
+  }
+}
+
+// This function ensures new tabs respect the current global state (e.g., lockdown).
+async function handleContentScriptReady(sender) {
+  const currentState = await getSystemState();
+  if (currentState === "awaiting_verification") {
+    console.log(
+      `New tab opened during lockdown (ID: ${sender.tab.id}). Injecting overlay.`,
+    );
+    // Command this newly loaded script to show the overlay immediately.
+    try {
+      await chrome.tabs.sendMessage(sender.tab.id, { action: "SHOW_OVERLAY" });
+    } catch (error) {
+      console.warn(
+        `Failed to send initial overlay command to tab ${sender.tab.id}: ${error.message}`,
+      );
     }
   }
 }
@@ -288,7 +306,10 @@ async function handleDataPayload(payload) {
   if (state === "profiling") {
     await handleProfiling(ENDPOINTS.TRAIN(uuid), payloadToSend);
   } else {
-    await handleDetection(ENDPOINTS.SCORE(uuid), payloadToSend, uuid);
+    // Handle 'awaiting_verification' here to ensure no data is sent during lockdown
+    if (state === "detection") {
+      await handleDetection(ENDPOINTS.SCORE(uuid), payloadToSend, uuid);
+    }
   }
 }
 
@@ -338,13 +359,9 @@ async function handleDetection(endpoint, payload, uuid) {
     if (data.is_anomaly) {
       console.warn("⚠️ ANOMALY DETECTED! Initiating lockdown.", data);
 
-      // Stop the current session immediately to prevent more data sending.
       clearTimeout(inactivityTimeout);
 
-      // Change the system state to 'awaiting_verification' to lock data collection.
       await setSystemState("awaiting_verification");
-
-      // Broadcast the command to show the overlay on all relevant tabs.
       await broadcastToTabs({ action: "SHOW_OVERLAY" });
     } else {
       console.log("Normal behavior detected.", data);

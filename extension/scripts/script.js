@@ -3,7 +3,11 @@
  *
  * This script is responsible for two main tasks:
  * 1. Forwarding raw user events to the service worker.
- * 2. Injecting and managing the UI overlay when an anomaly is detected.
+ * 2. Injecting and managing the UI overlay based on commands from the service worker.
+ *
+ * CHANGE: On initialization, this script now immediately sends a "CONTENT_SCRIPT_READY"
+ * message to the service worker to check if it should display the overlay,
+ * ensuring persistence across new tabs and navigations during a lockdown.
  */
 
 //  Unique ID for the overlay to prevent multiple injections
@@ -11,12 +15,10 @@ const MAXIDOM_OVERLAY_ID = "maxidom-verification-overlay";
 
 //  Function to create and inject the verification overlay
 function showVerificationOverlay() {
-  // If the overlay already exists, do nothing.
   if (document.getElementById(MAXIDOM_OVERLAY_ID)) {
     return;
   }
 
-  // Create the overlay elements
   const overlay = document.createElement("div");
   overlay.id = MAXIDOM_OVERLAY_ID;
   overlay.style.position = "fixed";
@@ -25,7 +27,7 @@ function showVerificationOverlay() {
   overlay.style.width = "100vw";
   overlay.style.height = "100vh";
   overlay.style.backgroundColor = "rgba(0, 0, 0, 0.75)";
-  overlay.style.zIndex = "2147483647"; // Max z-index
+  overlay.style.zIndex = "2147483647";
   overlay.style.display = "flex";
   overlay.style.justifyContent = "center";
   overlay.style.alignItems = "center";
@@ -42,7 +44,7 @@ function showVerificationOverlay() {
   const title = document.createElement("h2");
   title.textContent = "Unusual Activity Detected";
   title.style.margin = "0 0 15px 0";
-  title.style.color = "#ff6b6b"; // A warning color
+  title.style.color = "#ff6b6b";
 
   const message = document.createElement("p");
   message.textContent =
@@ -57,10 +59,9 @@ function showVerificationOverlay() {
   verifyButton.style.cursor = "pointer";
   verifyButton.style.border = "none";
   verifyButton.style.borderRadius = "4px";
-  verifyButton.style.background = "#61afef"; // A friendly blue
+  verifyButton.style.background = "#61afef";
   verifyButton.style.color = "white";
   verifyButton.onclick = () => {
-    // When clicked, send a message to the service worker to handle the next step.
     chrome.runtime.sendMessage({ type: "VERIFY_BUTTON_CLICKED" });
   };
 
@@ -69,7 +70,6 @@ function showVerificationOverlay() {
   modal.appendChild(verifyButton);
   overlay.appendChild(modal);
 
-  // Append the overlay to the page body
   document.body.appendChild(overlay);
 }
 
@@ -81,7 +81,7 @@ function hideVerificationOverlay() {
   }
 }
 
-//  Listener for commands from the service worker
+//  Listener for LIVE commands from the service worker
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "SHOW_OVERLAY") {
     showVerificationOverlay();
@@ -90,7 +90,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Mouse Movement
+// Announce readiness to the service worker on script load to ensure persistence on new tabs
+chrome.runtime.sendMessage({ type: "CONTENT_SCRIPT_READY" });
+
 document.addEventListener(
   "mousemove",
   (event) => {
@@ -107,11 +109,10 @@ document.addEventListener(
   true,
 );
 
-// Keyboard Input
 document.addEventListener(
   "keydown",
   (event) => {
-    if (event.repeat) return; // Ignore key-hold repeats
+    if (event.repeat) return;
     chrome.runtime.sendMessage({
       type: "RAW_EVENT",
       payload: {
@@ -139,7 +140,6 @@ document.addEventListener(
   true,
 );
 
-// Mouse Clicks
 document.addEventListener(
   "mousedown",
   (event) => {
@@ -174,13 +174,13 @@ document.addEventListener(
   true,
 );
 
-// Window Focus/Blur
 window.addEventListener("focus", () => {
   chrome.runtime.sendMessage({
     type: "RAW_EVENT",
     payload: { eventType: "focus", t: performance.now() },
   });
 });
+
 window.addEventListener("blur", () => {
   chrome.runtime.sendMessage({
     type: "RAW_EVENT",
@@ -188,7 +188,6 @@ window.addEventListener("blur", () => {
   });
 });
 
-// Window Resize
 window.addEventListener("resize", () => {
   chrome.runtime.sendMessage({
     type: "RAW_EVENT",
@@ -201,9 +200,6 @@ window.addEventListener("resize", () => {
   });
 });
 
-// Heartbeat Listener for Activity Detection
-// This listener's ONLY purpose is to tell the service worker that the user
-// is active (e.g., reading an article and scrolling). It sends no scroll data.
 document.addEventListener(
   "wheel",
   () => {
