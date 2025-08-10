@@ -128,9 +128,22 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 // Central Message Listener: The router for all incoming data from content scripts
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // If a session is currently being finalized and sent, drop incoming events.
-  // This is a small, acceptable data loss that prevents state corruption and data duplication.
+chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
+  // If the system is in a lockdown state, it only listens for the verification trigger.
+  const currentState = await getSystemState();
+  if (currentState === "awaiting_verification") {
+    if (message.type === "VERIFY_BUTTON_CLICKED") {
+      console.log("Verification process initiated by user.");
+      // For now, this is a placeholder. It resets the system to normal.
+      // In the future, this will open the password prompt.
+      await setSystemState("detection");
+      await broadcastToTabs({ action: "HIDE_OVERLAY" });
+    }
+    // Ignore all other messages (RAW_EVENT, HEARTBEAT) during lockdown.
+    return;
+  }
+
+  // If a session is currently being finalized and sent, drop incoming events to prevent state corruption.
   if (isFinalizing) {
     return;
   }
@@ -146,12 +159,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // Event Handlers
-function handleHeartbeat() {
-  // A heartbeat signifies user activity (like scrolling).
-  // Start the session timer if it hasn't started yet.
-  checkAndSetStartTimestamp(performance.now());
+async function broadcastToTabs(message) {
+  // Query for all tabs in the current window to show the overlay everywhere.
+  const tabs = await chrome.tabs.query({ windowType: "normal" });
+  for (const tab of tabs) {
+    try {
+      // We don't need to check if it's active, just send to all.
+      // The content script will handle not injecting duplicates.
+      await chrome.tabs.sendMessage(tab.id, message);
+    } catch (error) {
+      // This error is expected for tabs that don't have the content script injected (e.g., chrome:// pages)
+      if (!error.message.includes("Receiving end does not exist")) {
+        console.warn(
+          `Could not send message to tab ${tab.id}: ${error.message}`,
+        );
+      }
+    }
+  }
+}
 
-  // Reset the inactivity timer to keep the session alive.
+function handleHeartbeat() {
+  checkAndSetStartTimestamp(performance.now());
   clearTimeout(inactivityTimeout);
   inactivityTimeout = setTimeout(finalizeAndSendSession, INACTIVITY_TIMEOUT_MS);
 }
@@ -174,11 +202,9 @@ async function handleProfilingStatusRequest(sendResponse) {
 function handleRawEvent(event) {
   checkAndSetStartTimestamp(event.t);
 
-  // For every event, reset the inactivity timer. This is the core of the session model.
   clearTimeout(inactivityTimeout);
   inactivityTimeout = setTimeout(finalizeAndSendSession, INACTIVITY_TIMEOUT_MS);
 
-  // Check safety nets
   const sessionDuration = event.t - (sessionData.startTimestamp || event.t);
   const roughEventCount =
     (sessionData.keyEvents?.length || 0) +
@@ -192,17 +218,14 @@ function handleRawEvent(event) {
     console.log(
       "Safety net triggered (max duration or event count). Finalizing session.",
     );
-    // The async .then() pattern is removed. We simply call the finalize function.
-    // The state lock will handle concurrency safely.
     finalizeAndSendSession();
-    return; // Stop processing the current event; it will belong to the next session.
+    return;
   }
 
   switch (event.eventType) {
     case "mousemove":
       if (!sessionData.currentMousePath) sessionData.currentMousePath = [];
       sessionData.currentMousePath.push({ t: event.t, x: event.x, y: event.y });
-      // Debounce mouse path finalization
       clearTimeout(mouseMoveTimeout);
       mouseMoveTimeout = setTimeout(() => {
         if (sessionData.currentMousePath?.length > 0) {
@@ -213,7 +236,6 @@ function handleRawEvent(event) {
       break;
     case "keydown":
       if (!keyDownMap.has(event.code)) {
-        // Prevent overwriting if keyup is missed
         keyDownMap.set(event.code, event.t);
       }
       break;
@@ -245,7 +267,6 @@ function handleRawEvent(event) {
         mousedownEvent = null;
       }
       break;
-    // NOTE: 'wheel' is handled by the HEARTBEAT and has no data to aggregate here.
     case "focus":
     case "blur":
       sessionData.focusChanges.push({ type: event.eventType, t: event.t });
@@ -308,7 +329,6 @@ async function handleDetection(endpoint, payload, uuid) {
     if (response.status === 404) {
       console.warn("Model not found (404). Resetting to PROFILING state.");
       await setSystemState("profiling");
-      // Resubmit the current payload to the train endpoint to avoid data loss
       await handleProfiling(ENDPOINTS.TRAIN(uuid), payload);
       return;
     }
@@ -316,8 +336,16 @@ async function handleDetection(endpoint, payload, uuid) {
 
     const data = await response.json();
     if (data.is_anomaly) {
-      console.warn("⚠️ ANOMALY DETECTED!", data);
-      // TODO: Initiate the password prompt flow here
+      console.warn("⚠️ ANOMALY DETECTED! Initiating lockdown.", data);
+
+      // Stop the current session immediately to prevent more data sending.
+      clearTimeout(inactivityTimeout);
+
+      // Change the system state to 'awaiting_verification' to lock data collection.
+      await setSystemState("awaiting_verification");
+
+      // Broadcast the command to show the overlay on all relevant tabs.
+      await broadcastToTabs({ action: "SHOW_OVERLAY" });
     } else {
       console.log("Normal behavior detected.", data);
     }
