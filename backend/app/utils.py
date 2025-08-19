@@ -7,7 +7,6 @@ from pathlib import Path
 import joblib
 import logging
 import json
-from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -15,19 +14,17 @@ logger = logging.getLogger(__name__)
 ISOLATION_FOREST_PARAMS = {
     'n_estimators': 100,
     'max_samples': 'auto',
-    'contamination': 0.01, # Calibrated for clean training data
+    'contamination': 0.01,
     'random_state': 42
 }
 
-# The percentile of legitimate user scores to set as the anomaly threshold.
+# Define the percentile for the dynamic threshold.
 THRESHOLD_PERCENTILE = 5
 
 class UserModelManager:
     """
-    Manages the lifecycle of user behavior models:
-    - Storing raw payloads and feature data.
-    - Training, saving, and loading specialist models.
-    - Scoring new data using a router and dynamic thresholds.
+    Manages the lifecycle of user behavior models using a "Specialist Models" approach
+    with Dynamic Anomaly Thresholding.
     """
 
     def __init__(self, feature_names, user_data_dir: Path):
@@ -41,14 +38,16 @@ class UserModelManager:
         self.user_data_dir = user_data_dir
         self.all_feature_names = feature_names
         
-        # Define which features belong to which specialist model
+        # Define which features belong to which specialist model based on the new set
         self.mouse_features = [
             "avg_mouse_speed", "std_mouse_speed", "avg_mouse_acceleration",
             "std_mouse_acceleration", "path_straightness", "avg_click_duration",
-            "avg_pause_duration", "pause_frequency"
+            "avg_pause_duration", "pause_frequency", "avg_turn_angle",
+            "avg_stroke_velocity"
         ]
         self.typing_features = [
-            "avg_dwell_time_alpha", "avg_flight_time_digraph", "typing_speed_kps"
+            "avg_dwell_time_alpha", "avg_flight_time_digraph",
+            "std_flight_time_digraph", "typing_speed_kps"
         ]
         
         self.model_params = ISOLATION_FOREST_PARAMS.copy()
@@ -66,14 +65,7 @@ class UserModelManager:
         return user_dir
     
     def save_raw_payload(self, profile_id: str, payload_dict: dict, is_retraining_sample: bool = False):
-        """
-        Saves the raw JSON payload to a .jsonl file for archival.
-        
-        Args:
-            profile_id: User identifier.
-            payload_dict: The raw payload as a dictionary.
-            is_retraining_sample: If True, save to the retraining raw data file.
-        """
+        """Saves the raw JSON payload to a .jsonl file for archival."""
         user_dir = self._get_user_dir(profile_id)
         raw_data_dir = user_dir / "raw_data"
         raw_data_dir.mkdir(exist_ok=True)
@@ -87,18 +79,9 @@ class UserModelManager:
             logger.error(f"Failed to save raw payload for {profile_id}: {e}")
 
     def save_features(self, profile_id: str, feature_vector: np.ndarray, is_retraining_sample: bool = False) -> int:
-        """
-        Saves a feature vector to the appropriate CSV file.
-        
-        Args:
-            profile_id: User identifier.
-            feature_vector: Numpy array of features.
-            is_retraining_sample: If True, save to retraining pool.
-            
-        Returns:
-            The total count of samples in the file that was updated.
-        """
+        """Saves a feature vector to the appropriate CSV file."""
         user_dir = self._get_user_dir(profile_id)
+        
         features_file = user_dir / "retraining_pool.csv" if is_retraining_sample else user_dir / "features.csv"
 
         file_exists = features_file.exists()
@@ -112,17 +95,13 @@ class UserModelManager:
 
     def _count_samples(self, file_path: Path):
         """Counts the number of data rows in a CSV file."""
-        if not file_path.is_file(): return 0
+        if not file_path.is_file():
+            return 0
         with open(file_path, 'r') as f:
             return max(0, sum(1 for _ in f) - 1)
 
     def check_diversity(self, profile_id: str) -> dict:
-        """
-        Checks if the collected training data meets the minimum diversity criteria.
-        
-        Returns:
-            A dictionary containing the current and required counts for each metric.
-        """
+        """Checks if the collected training data meets the minimum diversity criteria."""
         features_file = self._get_user_dir(profile_id) / "features.csv"
         if not features_file.exists():
             return {
@@ -181,9 +160,9 @@ class UserModelManager:
             return False
 
     def _train_and_save_specialist(self, df: pd.DataFrame, feature_subset: List[str], model_type: str, profile_id: str):
-        """Helper to train, calibrate, and save a single specialist model package."""
+        """Helper function to train, calibrate, and save a single specialist model package."""
         if len(df) < 20: 
-            logger.warning(f"Skipping {model_type} model for {profile_id}: only {len(df)} samples.")
+            logger.warning(f"Skipping {model_type} model for {profile_id}: only {len(df)} samples, which is below the minimum of 20.")
             return
 
         user_dir = self._get_user_dir(profile_id)
@@ -194,7 +173,6 @@ class UserModelManager:
         model = IsolationForest(**self.model_params)
         model.fit(features)
         
-        # Calibrate a dynamic threshold based on the training data itself.
         scores = model.decision_function(features)
         threshold = np.percentile(scores, THRESHOLD_PERCENTILE)
         logger.info(f"Calibrated dynamic threshold for '{model_type}' model: {threshold:.4f}")
@@ -214,15 +192,9 @@ class UserModelManager:
         return joblib.load(model_path)
 
     def score(self, profile_id, feature_vector: np.ndarray) -> Dict[str, Any]:
-        """
-        Scores new data by routing it to the appropriate specialist model.
-        
-        Returns:
-            A dictionary containing the anomaly decision, score, model used, and threshold.
-        """
+        """Scores new data by routing it to the appropriate specialist model."""
         features_df = pd.DataFrame([feature_vector], columns=self.all_feature_names)
         
-        # Router logic to determine which specialist model to use.
         is_mouse_active = features_df.iloc[0]["avg_mouse_speed"] > 0
         is_typing_active = features_df.iloc[0]["typing_speed_kps"] > 0
         
@@ -239,7 +211,7 @@ class UserModelManager:
         
         model_package = self.load_model_package(profile_id, model_type)
         if model_package is None:
-            logger.warning(f"Specialist model '{model_type}' not found. Falling back to 'mixed' model.")
+            logger.warning(f"Specialist model '{model_type}' not found for {profile_id}. Falling back to 'mixed' model.")
             model_package = self.load_model_package(profile_id, "mixed")
             model_type = "mixed"
             feature_subset = self.all_feature_names
