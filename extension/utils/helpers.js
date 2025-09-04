@@ -5,9 +5,8 @@ const BASE_URL = "http://127.0.0.1:8000/api";
 export const ENDPOINTS = {
   TRAIN: (uuid) => `${BASE_URL}/train/${uuid}`,
   SCORE: (uuid) => `${BASE_URL}/score/${uuid}`,
-  // TODO: Add other endpoints as for enrollment and verification
-  // ENROLL: (uuid) => `${BASE_URL}/enroll/${uuid}`,
-  // VERIFY_PASSWORD: (uuid) => `${BASE_URL}/verify_password/${uuid}`,
+  ENROLL: (uuid) => `${BASE_URL}/enroll/${uuid}`,
+  VERIFY_PASSWORD: (uuid) => `${BASE_URL}/verify_password/${uuid}`,
 };
 
 // Storage Getters
@@ -31,3 +30,4 @@ export async function setSystemState(newState) {
 export async function setProfilingProgress(progress) {
   await chrome.storage.local.set({ profiling_progress: progress });
 }
+

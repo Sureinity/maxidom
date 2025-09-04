@@ -1,14 +1,53 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MaxiDOM</title>
-</head>
-<body>
-    <h1>MaxiDOM Extension</h1>
-    <p id="status">Loading...</p>
-    <p id="progress"></p>
-    <p id="anomaly-status"></p>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <title>MaxiDOM Status</title>
+    <style>
+      body {
+        width: 250px;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+          Arial, sans-serif;
+        padding: 15px;
+        background-color: #282c34;
+        color: #abb2bf;
+        text-align: center;
+      }
+      .status-indicator {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 8px;
+        vertical-align: middle;
+      }
+      .status-active {
+        background-color: #98c379;
+      }
+      .status-profiling {
+        background-color: #e5c07b;
+      }
+      .status-enrollment {
+        background-color: #e06c75;
+      }
+      h3 {
+        margin-top: 0;
+        color: #61afef;
+      }
+      p {
+        font-size: 14px;
+        margin-bottom: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h3>MaxiDOM Status</h3>
+    <p id="status-text">
+      <span id="status-indicator" class="status-indicator"></span>
+      <span id="status-message">Loading...</span>
+    </p>
+    <script src="popup.js"></script>
+  </body>
 </html>
+

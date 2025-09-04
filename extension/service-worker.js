@@ -108,56 +108,71 @@ async function finalizeAndSendSession() {
   }
 }
 
+// A function to dynamically set the popup based on the system state.
+async function updateActionPopup() {
+  const state = await getSystemState();
+  if (state === "enrollment") {
+    await chrome.action.setPopup({ popup: "onboarding.html" });
+  } else {
+    await chrome.action.setPopup({ popup: "popup.html" });
+  }
+}
+
 // Chrome Listeners
-chrome.runtime.onInstalled.addListener(async () => {
-  const existingUUID = await getProfileUUID();
-  if (!existingUUID) {
+chrome.runtime.onInstalled.addListener(async (details) => {
+  if (details.reason === "install") {
     const newUUID = crypto.randomUUID();
     await chrome.storage.local.set({ profile_uuid: newUUID });
-    await setSystemState("profiling");
+    await setSystemState("enrollment");
     console.log(
-      "New profile UUID created. System state set to profiling.",
+      "New profile UUID created. System state set to enrollment.",
       newUUID,
     );
-  } else {
-    console.log("Existing profile UUID confirmed:", existingUUID);
+    await updateActionPopup();
+    chrome.tabs.create({ url: "onboarding.html" });
+  } else if (details.reason === "update") {
+    await updateActionPopup();
   }
 });
 
-// Central Message Listener: The router for all incoming data from content scripts
-chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-  const currentState = await getSystemState();
+chrome.runtime.onStartup.addListener(async () => {
+  await updateActionPopup();
+});
 
-  // If the system is in lockdown, it has a separate, focused set of listeners.
-  if (currentState === "awaiting_verification") {
-    if (message.type === "VERIFY_BUTTON_CLICKED") {
-      console.log("Verification process initiated by user.");
-      await setSystemState("detection");
-      await broadcastToTabs({ action: "HIDE_OVERLAY" });
+// Central Message Listener: The router for all incoming data from content scripts
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "ENROLL_PASSWORD") {
+    handleEnrollment(message.password, sendResponse);
+    return true;
+  }
+  if (message.type === "REQUEST_PROFILING_STATUS") {
+    handleProfilingStatusRequest(sendResponse);
+    return true;
+  }
+  if (message.type === "PASSWORD_SUBMITTED") {
+    handlePasswordVerification(message.password);
+    return; // No response needed for this message path
+  }
+
+  (async () => {
+    const currentState = await getSystemState();
+    if (currentState === "awaiting_verification") {
+      if (message.type === "CONTENT_SCRIPT_READY") {
+        await handleContentScriptReady(sender);
+      }
+      return;
     }
-    // New tabs will announce their readiness. Check if they need an overlay.
-    if (message.type === "CONTENT_SCRIPT_READY") {
+    if (isFinalizing) {
+      return;
+    }
+    if (message.type === "RAW_EVENT") {
+      handleRawEvent(message.payload);
+    } else if (message.type === "HEARTBEAT") {
+      handleHeartbeat();
+    } else if (message.type === "CONTENT_SCRIPT_READY") {
       await handleContentScriptReady(sender);
     }
-    return; // Ignore all other messages during lockdown.
-  }
-
-  // If a session is currently being finalized, drop incoming events to prevent state corruption.
-  if (isFinalizing) {
-    return;
-  }
-
-  if (message.type === "RAW_EVENT") {
-    handleRawEvent(message.payload);
-  } else if (message.type === "HEARTBEAT") {
-    handleHeartbeat();
-  } else if (message.type === "REQUEST_PROFILING_STATUS") {
-    handleProfilingStatusRequest(sendResponse);
-    return true; // Indicates an asynchronous response will be sent
-  } else if (message.type === "CONTENT_SCRIPT_READY") {
-    // This handles the case where a tab loads when not in lockdown.
-    await handleContentScriptReady(sender);
-  }
+  })();
 });
 
 // Event Handlers
@@ -168,7 +183,7 @@ async function broadcastToTabs(message) {
     try {
       await chrome.tabs.sendMessage(tab.id, message);
     } catch (error) {
-      // This error is expected for tabs that don't have the content script injected (e.g., chrome:// pages).
+      // This error is expected for tabs that don't have the content script injected.
       if (!error.message.includes("Receiving end does not exist")) {
         console.warn(
           `Could not send message to tab ${tab.id}: ${error.message}`,
@@ -208,38 +223,27 @@ async function handleProfilingStatusRequest(sendResponse) {
   const profiling_progress_data =
     await chrome.storage.local.get("profiling_progress");
   const profiling_progress = profiling_progress_data.profiling_progress || {};
-
-  sendResponse({
-    profile_uuid,
-    system_state,
-    profiling_progress,
-  });
+  sendResponse({ profile_uuid, system_state, profiling_progress });
 }
 
 // Main Event Aggregation Logic
 function handleRawEvent(event) {
   checkAndSetStartTimestamp(event.t);
-
   clearTimeout(inactivityTimeout);
   inactivityTimeout = setTimeout(finalizeAndSendSession, INACTIVITY_TIMEOUT_MS);
-
   const sessionDuration = event.t - (sessionData.startTimestamp || event.t);
   const roughEventCount =
     (sessionData.keyEvents?.length || 0) +
     (sessionData.clicks?.length || 0) +
     (sessionData.mousePaths?.length || 0);
-
   if (
     sessionDuration > MAX_SESSION_DURATION_MS ||
     roughEventCount > MAX_EVENT_COUNT
   ) {
-    console.log(
-      "Safety net triggered (max duration or event count). Finalizing session.",
-    );
+    console.log("Safety net triggered. Finalizing session.");
     finalizeAndSendSession();
     return;
   }
-
   switch (event.eventType) {
     case "mousemove":
       if (!sessionData.currentMousePath) sessionData.currentMousePath = [];
@@ -299,17 +303,13 @@ function handleRawEvent(event) {
 async function handleDataPayload(payload) {
   const uuid = await getProfileUUID();
   if (!uuid) throw new Error("Profile UUID not found.");
-
   const { userId, ...payloadToSend } = payload;
   const state = await getSystemState();
 
   if (state === "profiling") {
     await handleProfiling(ENDPOINTS.TRAIN(uuid), payloadToSend);
-  } else {
-    // Handle 'awaiting_verification' here to ensure no data is sent during lockdown
-    if (state === "detection") {
-      await handleDetection(ENDPOINTS.SCORE(uuid), payloadToSend, uuid);
-    }
+  } else if (state === "detection") {
+    await handleDetection(ENDPOINTS.SCORE(uuid), payloadToSend, uuid);
   }
 }
 
@@ -322,11 +322,9 @@ async function handleProfiling(endpoint, payload) {
       body: JSON.stringify(payload),
     });
     if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-
     const data = await response.json();
     await setProfilingProgress(data.progress);
     console.log("Profiling progress updated:", data.progress);
-
     if (data.progress.is_ready) {
       console.log(
         "Profile readiness conditions met. Transitioning to DETECTION state.",
@@ -346,7 +344,6 @@ async function handleDetection(endpoint, payload, uuid) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-
     if (response.status === 404) {
       console.warn("Model not found (404). Resetting to PROFILING state.");
       await setSystemState("profiling");
@@ -354,13 +351,10 @@ async function handleDetection(endpoint, payload, uuid) {
       return;
     }
     if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-
     const data = await response.json();
     if (data.is_anomaly) {
       console.warn("⚠️ ANOMALY DETECTED! Initiating lockdown.", data);
-
       clearTimeout(inactivityTimeout);
-
       await setSystemState("awaiting_verification");
       await broadcastToTabs({ action: "SHOW_OVERLAY" });
     } else {
@@ -368,5 +362,68 @@ async function handleDetection(endpoint, payload, uuid) {
     }
   } catch (error) {
     console.error("Error during detection data submission:", error);
+  }
+}
+
+// Authentication Flow Handlers
+async function handleEnrollment(password, sendResponse) {
+  const uuid = await getProfileUUID();
+  if (!uuid) {
+    sendResponse({ success: false, error: "Profile ID not found." });
+    return;
+  }
+  try {
+    const response = await fetch(ENDPOINTS.ENROLL(uuid), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: password }),
+    });
+    if (response.ok) {
+      await setSystemState("profiling");
+      await updateActionPopup();
+      sendResponse({ success: true });
+    } else {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || "Enrollment failed.");
+    }
+  } catch (error) {
+    console.error("Enrollment error:", error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+async function handlePasswordVerification(password) {
+  const uuid = await getProfileUUID();
+  if (!uuid) return;
+
+  try {
+    const response = await fetch(ENDPOINTS.VERIFY_PASSWORD(uuid), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: password }),
+    });
+
+    if (!response.ok) throw new Error("Verification request failed.");
+
+    const result = await response.json();
+    if (result.verified) {
+      console.log(
+        "Password verification successful. Resuming normal operation.",
+      );
+      await setSystemState("detection");
+      await broadcastToTabs({ action: "HIDE_OVERLAY" });
+    } else {
+      console.warn("Password verification failed.");
+      await broadcastToTabs({
+        action: "SHOW_VERIFICATION_ERROR",
+        error: "Incorrect password. Please try again.",
+      });
+    }
+  } catch (error) {
+    console.error("Verification error:", error);
+    await broadcastToTabs({
+      action: "SHOW_VERIFICATION_ERROR",
+      error: "An error occurred. Please try again.",
+    });
   }
 }

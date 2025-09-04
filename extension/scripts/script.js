@@ -3,11 +3,7 @@
  *
  * This script is responsible for two main tasks:
  * 1. Forwarding raw user events to the service worker.
- * 2. Injecting and managing the UI overlay based on commands from the service worker.
- *
- * CHANGE: On initialization, this script now immediately sends a "CONTENT_SCRIPT_READY"
- * message to the service worker to check if it should display the overlay,
- * ensuring persistence across new tabs and navigations during a lockdown.
+ * 2. Injecting and managing the interactive password overlay when an anomaly is detected.
  */
 
 //  Unique ID for the overlay to prevent multiple injections
@@ -19,6 +15,7 @@ function showVerificationOverlay() {
     return;
   }
 
+  // Create overlay elements
   const overlay = document.createElement("div");
   overlay.id = MAXIDOM_OVERLAY_ID;
   overlay.style.position = "fixed";
@@ -52,25 +49,64 @@ function showVerificationOverlay() {
   message.style.margin = "0 0 25px 0";
   message.style.maxWidth = "300px";
 
-  const verifyButton = document.createElement("button");
-  verifyButton.textContent = "Verify Identity";
-  verifyButton.style.padding = "12px 24px";
-  verifyButton.style.fontSize = "16px";
-  verifyButton.style.cursor = "pointer";
-  verifyButton.style.border = "none";
-  verifyButton.style.borderRadius = "4px";
-  verifyButton.style.background = "#61afef";
-  verifyButton.style.color = "white";
-  verifyButton.onclick = () => {
-    chrome.runtime.sendMessage({ type: "VERIFY_BUTTON_CLICKED" });
+  // Create the form for password input
+  const form = document.createElement("form");
+  const passwordInput = document.createElement("input");
+  passwordInput.type = "password";
+  passwordInput.placeholder = "Enter your password";
+  passwordInput.style.width = "100%";
+  passwordInput.style.padding = "10px";
+  passwordInput.style.fontSize = "16px";
+  passwordInput.style.borderRadius = "4px";
+  passwordInput.style.border = "1px solid #3b4048";
+  passwordInput.style.backgroundColor = "#282c34";
+  passwordInput.style.color = "#abb2bf";
+  passwordInput.style.boxSizing = "border-box";
+  passwordInput.style.marginBottom = "15px";
+
+  const submitButton = document.createElement("button");
+  submitButton.type = "submit";
+  submitButton.textContent = "Verify";
+  submitButton.style.width = "100%";
+  submitButton.style.padding = "12px 24px";
+  submitButton.style.fontSize = "16px";
+  submitButton.style.cursor = "pointer";
+  submitButton.style.border = "none";
+  submitButton.style.borderRadius = "4px";
+  submitButton.style.background = "#61afef";
+  submitButton.style.color = "white";
+
+  const errorArea = document.createElement("div");
+  errorArea.style.color = "#e06c75";
+  errorArea.style.marginTop = "10px";
+  errorArea.style.height = "20px";
+  errorArea.style.fontSize = "14px";
+
+  form.appendChild(passwordInput);
+  form.appendChild(submitButton);
+
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    const password = passwordInput.value;
+    if (password) {
+      submitButton.disabled = true;
+      submitButton.textContent = "Verifying...";
+      // Send the password to the service worker for verification.
+      chrome.runtime.sendMessage({
+        type: "PASSWORD_SUBMITTED",
+        password: password,
+      });
+    }
   };
 
   modal.appendChild(title);
   modal.appendChild(message);
-  modal.appendChild(verifyButton);
+  modal.appendChild(form);
+  modal.appendChild(errorArea);
   overlay.appendChild(modal);
 
   document.body.appendChild(overlay);
+  passwordInput.focus();
 }
 
 //  Function to remove the overlay
@@ -81,12 +117,30 @@ function hideVerificationOverlay() {
   }
 }
 
-//  Listener for LIVE commands from the service worker
+//  Function to show an error message within the overlay
+function showVerificationError(errorMessage) {
+  const overlay = document.getElementById(MAXIDOM_OVERLAY_ID);
+  if (overlay) {
+    const errorArea = overlay.querySelector('div[style*="color: #e06c75"]');
+    const submitButton = overlay.querySelector('button[type="submit"]');
+    if (errorArea) {
+      errorArea.textContent = errorMessage;
+    }
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = "Verify";
+    }
+  }
+}
+
+//  Listener for commands from the service worker
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "SHOW_OVERLAY") {
     showVerificationOverlay();
   } else if (message.action === "HIDE_OVERLAY") {
     hideVerificationOverlay();
+  } else if (message.action === "SHOW_VERIFICATION_ERROR") {
+    showVerificationError(message.error);
   }
 });
 
