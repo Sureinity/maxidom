@@ -116,21 +116,25 @@ class UserModelManager:
         
         keyboard_activity_col = "typing_speed_kps" 
         mouse_activity_col = "avg_mouse_speed"
+        digraph_activity_col = "avg_flight_time_digraph"
 
         total = len(df)
         keyboard = len(df[df[keyboard_activity_col] > 0])
         mouse = len(df[df[mouse_activity_col] > 0])
+        digraphs = len(df[df[digraph_activity_col] > 0])
 
         is_ready = (
             total >= self.min_samples_for_training and
             keyboard >= self.min_keyboard_samples and
-            mouse >= self.min_mouse_samples
+            mouse >= self.min_mouse_samples and
+            digraphs >= self.min_digraph_samples
         )
 
         return {
             "total_samples": {"current": total, "required": self.min_samples_for_training},
             "keyboard_samples": {"current": keyboard, "required": self.min_keyboard_samples},
             "mouse_samples": {"current": mouse, "required": self.min_mouse_samples},
+            "digraph_samples": {"current": digraphs, "required": self.min_digraph_samples},
             "is_ready": is_ready
         }
 
