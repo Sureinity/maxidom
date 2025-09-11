@@ -56,7 +56,8 @@ class UserModelManager:
         # Diversity thresholds for the entire dataset before training begins
         self.min_samples_for_training = 300
         self.min_keyboard_samples = 50 
-        self.min_mouse_samples = 150 
+        self.min_mouse_samples = 150
+        self.min_digraph_samples = 30
         self.retraining_threshold = 500
  
     def _get_user_dir(self, profile_id) -> Path:

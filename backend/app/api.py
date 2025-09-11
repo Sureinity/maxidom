@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="MaxiDOM Behavioral Biometrics API",
     description="API for training and scoring user behavioral profiles.",
-    version="2.2.0-auth"
+    version="2.3.0-lockdown"
 )
 
 # Call the database initializer on application startup
@@ -55,6 +55,7 @@ model_manager = UserModelManager(FEATURE_NAMES, USER_DATA_DIR)
 def enroll_user(profile_id: str, data: dict = Body(...)):
     """
     Enrolls a new user by hashing and storing their password.
+    This endpoint is decoupled from the client's state machine.
     """
     password = data.get("password")
     if not password:
@@ -68,6 +69,8 @@ def enroll_user(profile_id: str, data: dict = Body(...)):
         raise HTTPException(status_code=409, detail="Profile already enrolled.")
         
     logger.info(f"Successfully enrolled new profile: {profile_id}")
+    # The backend's only job is to confirm success. The client is responsible
+    # for changing its own state from 'enrollment' to 'profiling'.
     return {"status": "enrollment successful", "profile_id": profile_id}
 
 

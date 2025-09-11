@@ -9,11 +9,26 @@
 //  Unique ID for the overlay to prevent multiple injections
 const MAXIDOM_OVERLAY_ID = "maxidom-verification-overlay";
 
-//  Function to create and inject the verification overlay
-function showVerificationOverlay() {
+//  Function to create and inject the verification overlay with contextual messages
+function showVerificationOverlay(context) {
   if (document.getElementById(MAXIDOM_OVERLAY_ID)) {
     return;
   }
+
+  // Define messages based on the context provided by the service worker
+  const messages = {
+    anomaly: {
+      title: "Unusual Activity Detected",
+      message: "For your security, please verify your identity to continue.",
+    },
+    profiling_lock: {
+      title: "Session Locked",
+      message: "Please enter your password to begin or resume your secure profiling session.",
+    },
+  };
+
+  // Default to the 'anomaly' message if context is unknown
+  const displayMessages = messages[context] || messages['anomaly'];
 
   // Create overlay elements
   const overlay = document.createElement("div");
@@ -39,13 +54,12 @@ function showVerificationOverlay() {
   modal.style.boxShadow = "0 5px 15px rgba(0,0,0,0.5)";
 
   const title = document.createElement("h2");
-  title.textContent = "Unusual Activity Detected";
+  title.textContent = displayMessages.title; // Dynamic Title
   title.style.margin = "0 0 15px 0";
   title.style.color = "#ff6b6b";
 
   const message = document.createElement("p");
-  message.textContent =
-    "For your security, please verify your identity to continue.";
+  message.textContent = displayMessages.message; // Dynamic Message
   message.style.margin = "0 0 25px 0";
   message.style.maxWidth = "300px";
 
@@ -136,7 +150,8 @@ function showVerificationError(errorMessage) {
 //  Listener for commands from the service worker
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "SHOW_OVERLAY") {
-    showVerificationOverlay();
+    // Pass the context from the message to the function
+    showVerificationOverlay(message.context);
   } else if (message.action === "HIDE_OVERLAY") {
     hideVerificationOverlay();
   } else if (message.action === "SHOW_VERIFICATION_ERROR") {

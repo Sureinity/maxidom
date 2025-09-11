@@ -17,7 +17,8 @@ export async function getProfileUUID() {
 
 export async function getSystemState() {
   const result = await chrome.storage.local.get("system_state");
-  return result.system_state || "profiling"; // Default to profiling
+  // The new default state for any user without a state is 'enrollment'.
+  return result.system_state || "enrollment"; 
 }
 
 // Storage Setters
@@ -30,4 +31,3 @@ export async function setSystemState(newState) {
 export async function setProfilingProgress(progress) {
   await chrome.storage.local.set({ profiling_progress: progress });
 }
-
