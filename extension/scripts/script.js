@@ -49,6 +49,8 @@ function showVerificationOverlay(context) {
   overlay.style.alignItems = "center";
   overlay.style.color = "white";
   overlay.style.fontFamily = "sans-serif";
+  overlay.style.backdropFilter = 'blur(20px)';
+  overlay.style.webkitBackdropFilter = 'blur(20px)';
 
   const modal = document.createElement("div");
   modal.style.textAlign = "center";
