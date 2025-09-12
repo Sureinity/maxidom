@@ -3,11 +3,15 @@
  *
  * This script is responsible for two main tasks:
  * 1. Forwarding raw user events to the service worker.
- * 2. Injecting and managing the interactive password overlay when an anomaly is detected.
+ * 2. Injecting and managing the UI overlay, including suppressing all
+ *    keyboard interaction with the underlying page during a lockdown.
  */
 
 //  Unique ID for the overlay to prevent multiple injections
 const MAXIDOM_OVERLAY_ID = "maxidom-verification-overlay";
+
+let wheelListener = null; // NEW: Listener for scroll events
+let keydownListener = null;
 
 //  Function to create and inject the verification overlay with contextual messages
 function showVerificationOverlay(context) {
@@ -54,12 +58,12 @@ function showVerificationOverlay(context) {
   modal.style.boxShadow = "0 5px 15px rgba(0,0,0,0.5)";
 
   const title = document.createElement("h2");
-  title.textContent = displayMessages.title; // Dynamic Title
+  title.textContent = displayMessages.title;
   title.style.margin = "0 0 15px 0";
   title.style.color = "#ff6b6b";
 
   const message = document.createElement("p");
-  message.textContent = displayMessages.message; // Dynamic Message
+  message.textContent = displayMessages.message;
   message.style.margin = "0 0 25px 0";
   message.style.maxWidth = "300px";
 
@@ -67,6 +71,7 @@ function showVerificationOverlay(context) {
   const form = document.createElement("form");
   const passwordInput = document.createElement("input");
   passwordInput.type = "password";
+  passwordInput.id = 'maxidom-password-input';
   passwordInput.placeholder = "Enter your password";
   passwordInput.style.width = "100%";
   passwordInput.style.padding = "10px";
@@ -121,13 +126,45 @@ function showVerificationOverlay(context) {
 
   document.body.appendChild(overlay);
   passwordInput.focus();
+
+  keydownListener = (event) => {
+    if (event.target.id === 'maxidom-password-input') {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+  };
+
+  window.addEventListener('keydown', keydownListener, { capture: true });
+
+    wheelListener = (event) => {
+    // Unconditionally block all scroll events while the overlay is active.
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+  };
+
+  window.addEventListener('wheel', wheelListener, { capture: true, passive: false });
+
 }
 
-//  Function to remove the overlay
+//  Function to remove the overlay and the keyboard listener
 function hideVerificationOverlay() {
   const overlay = document.getElementById(MAXIDOM_OVERLAY_ID);
   if (overlay) {
     overlay.remove();
+  }
+
+  if (keydownListener) {
+    window.removeEventListener('keydown', keydownListener, { capture: true });
+    keydownListener = null;
+  }
+  
+  if (wheelListener) {
+    window.removeEventListener('wheel', wheelListener, { capture: true });
+    wheelListener = null;
   }
 }
 
@@ -150,7 +187,6 @@ function showVerificationError(errorMessage) {
 //  Listener for commands from the service worker
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "SHOW_OVERLAY") {
-    // Pass the context from the message to the function
     showVerificationOverlay(message.context);
   } else if (message.action === "HIDE_OVERLAY") {
     hideVerificationOverlay();
