@@ -5,9 +5,8 @@ const BASE_URL = "http://127.0.0.1:8000/api";
 export const ENDPOINTS = {
   TRAIN: (uuid) => `${BASE_URL}/train/${uuid}`,
   SCORE: (uuid) => `${BASE_URL}/score/${uuid}`,
-  // TODO: Add other endpoints as for enrollment and verification
-  // ENROLL: (uuid) => `${BASE_URL}/enroll/${uuid}`,
-  // VERIFY_PASSWORD: (uuid) => `${BASE_URL}/verify_password/${uuid}`,
+  ENROLL: (uuid) => `${BASE_URL}/enroll/${uuid}`,
+  VERIFY_PASSWORD: (uuid) => `${BASE_URL}/verify_password/${uuid}`,
 };
 
 // Storage Getters
@@ -18,7 +17,8 @@ export async function getProfileUUID() {
 
 export async function getSystemState() {
   const result = await chrome.storage.local.get("system_state");
-  return result.system_state || "profiling"; // Default to profiling
+  // The new default state for any user without a state is 'enrollment'.
+  return result.system_state || "enrollment"; 
 }
 
 // Storage Setters
