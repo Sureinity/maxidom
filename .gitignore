@@ -32,6 +32,7 @@ venv/
 # uv package manager
 .uv/
 .venv/
+uv.lock
 
 # SSL Certificate
 *.pem
@@ -52,4 +53,4 @@ node_modules/
 
 # Miscellaneous
 user_data/
-
+*.db
