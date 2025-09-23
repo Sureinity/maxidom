@@ -33,11 +33,9 @@ function resetSessionData() {
   sessionData = {
     startTimestamp: null,
     endTimestamp: null,
-    windowSize: { width: 0, height: 0 },
     keyEvents: [],
     mousePaths: [],
     clicks: [],
-    focusChanges: [],
   };
 
   keyDownMap.clear();
@@ -61,11 +59,12 @@ async function finalizeAndSendSession() {
     return;
   }
 
+  // Upon finalization, any pending timers must be cleared to prevent potential issues caused by stale timers.
+  clearTimeout(inactivityTimeout);
+  inactivityTimeout = null;
+
   // Set the lock to prevent new events from being processed.
   isFinalizing = true;
-
-  if (inactivityTimeout) clearTimeout(inactivityTimeout);
-  inactivityTimeout = null;
 
   sessionData.endTimestamp = performance.now();
 
@@ -142,8 +141,6 @@ chrome.runtime.onStartup.addListener(async () => {
   isProfilingUnlocked = false; // Always start locked if in profiling mode.
   console.log("Browser startup: Profiling session is locked by default.");
   await updateActionPopup();
-  // On startup, we don't know which tabs will be restored, so we rely on
-  // their content scripts calling `CONTENT_SCRIPT_READY`.
 });
 
 // Listener for new windows to enforce lockdown.
@@ -342,13 +339,6 @@ function handleRawEvent(event) {
         });
         mousedownEvent = null;
       }
-      break;
-    case "focus":
-    case "blur":
-      sessionData.focusChanges.push({ type: event.eventType, t: event.t });
-      break;
-    case "resize":
-      sessionData.windowSize = { width: event.width, height: event.height };
       break;
   }
 }

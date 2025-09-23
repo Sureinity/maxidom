@@ -49,8 +49,8 @@ function showVerificationOverlay(context) {
   overlay.style.alignItems = "center";
   overlay.style.color = "white";
   overlay.style.fontFamily = "sans-serif";
-  overlay.style.backdropFilter = 'blur(20px)';
-  overlay.style.webkitBackdropFilter = 'blur(20px)';
+  overlay.style.backdropFilter = 'blur(30px)';
+  overlay.style.webkitBackdropFilter = 'blur(30px)';
 
   const modal = document.createElement("div");
   modal.style.textAlign = "center";
@@ -280,32 +280,6 @@ document.addEventListener(
   },
   true,
 );
-
-window.addEventListener("focus", () => {
-  chrome.runtime.sendMessage({
-    type: "RAW_EVENT",
-    payload: { eventType: "focus", t: performance.now() },
-  });
-});
-
-window.addEventListener("blur", () => {
-  chrome.runtime.sendMessage({
-    type: "RAW_EVENT",
-    payload: { eventType: "blur", t: performance.now() },
-  });
-});
-
-window.addEventListener("resize", () => {
-  chrome.runtime.sendMessage({
-    type: "RAW_EVENT",
-    payload: {
-      eventType: "resize",
-      t: performance.now(),
-      width: window.innerWidth,
-      height: window.innerHeight,
-    },
-  });
-});
 
 document.addEventListener(
   "wheel",
