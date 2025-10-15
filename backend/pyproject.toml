@@ -1,15 +1,18 @@
 [project]
-name = "backend"
-version = "0.1.0"
-description = "Add your description here"
+name = "MaxiDOM"
+version = "2.3.1"
+description = "A Chrome extension that uses behavioral biometrics such as mouse movements and typing patterns to detect unauthorized access to a browser profile."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "bcrypt>=4.3.0",
     "fastapi>=0.115.12",
     "joblib>=1.5.1",
     "numpy>=2.3.1",
     "pandas>=2.3.1",
+    "passlib>=1.7.4",
     "pathlib>=1.0.1",
+    "requests>=2.32.4",
     "scikit-learn>=1.7.0",
     "uvicorn>=0.34.3",
 ]
