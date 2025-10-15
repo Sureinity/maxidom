@@ -1,10 +1,6 @@
 from pydantic import BaseModel
 from typing import Literal, List
 
-class WindowSize(BaseModel):
-    width: int
-    height: int
-
 class KeyEvent(BaseModel):
     code: str
     downTime: float
@@ -22,18 +18,10 @@ class Click(BaseModel):
     button: int
     duration: float
 
-class FocusChange(BaseModel):
-    type: Literal["focus", "blur"]
-    t: float
-
 # Aggregated payload model
-# The `profile_id` has been REMOVED from this model.
-# It will be passed exclusively as a URL path parameter.
 class Payload(BaseModel):
     startTimestamp: float
     endTimestamp: float
-    windowSize: WindowSize
     keyEvents: List[KeyEvent]
     mousePaths: List[List[MousePoint]]
     clicks: List[Click]
-    focusChanges: List[FocusChange]
