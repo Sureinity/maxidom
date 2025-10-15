@@ -1,14 +1,17 @@
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Body
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+import numpy as np
+import logging
+import sys
+
 from database import init_db, save_user_hash, get_user_hash
 from security import get_password_hash, verify_password
 from models import Payload
 from feature_extraction import FeatureExtractor
 from utils import UserModelManager
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Body
-from fastapi.middleware.cors import CORSMiddleware
-from pathlib import Path
-import logging
-import sys
-import numpy as np
 
 # Logging Setup
 logging.basicConfig(
@@ -25,7 +28,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="MaxiDOM Behavioral Biometrics API",
     description="API for training and scoring user behavioral profiles.",
-    version="2.3.0-lockdown"
+    version="2.3.1-static"
 )
 
 # Call the database initializer on application startup
@@ -42,6 +45,9 @@ app.add_middleware(
 )
 
 # Global Configurations & Instantiation
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+STATIC_DIR.mkdir(exist_ok=True)
+
 USER_DATA_DIR = Path(__file__).resolve().parent / "user_data"
 USER_DATA_DIR.mkdir(exist_ok=True)
 
@@ -177,3 +183,21 @@ def test_score_row(profile_id: str, feature_row: dict):
         raise HTTPException(status_code=404, detail=f"Model not found for user {profile_id}.")
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal error during test scoring.")
+
+
+# Serving Extension auto-update files
+@app.get("/static/extension.crx")
+def serve_crx():
+    path = STATIC_DIR / "extension.crx"
+    if not path.exists():
+        return HTTPException(status_code=404, detail="File not found.")
+
+    return FileResponse(path, media_type="application/x-chrome-extension")
+
+@app.get("/static/update.xml")
+def serve_xml():
+    path = STATIC_DIR / "update.xml"
+    if not path.exists():
+        return HTTPException(status_code=404, detail="File not found.")
+
+    return FileResponse(path, media_type="application/xml")
