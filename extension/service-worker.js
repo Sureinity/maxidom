@@ -12,6 +12,7 @@ const INACTIVITY_TIMEOUT_MS = 5000; // Primary trigger: End session after 5s of 
 const MAX_SESSION_DURATION_MS = 90000; // Safety Net 1: Force end session after 90s.
 const MAX_EVENT_COUNT = 2000; // Safety Net 2: Force end session after 2000 events.
 const MINIMUM_EVENTS_THRESHOLD = 20; // Noise Reduction: Discard sessions with too few meaningful events.
+const PASSIVE_SESSION_HEARTBEAT_THRESHOLD = 10; // New threshold to identify passive (scrolling) sessions.
 
 // Global State
 let sessionData = {};
@@ -33,11 +34,10 @@ function resetSessionData() {
   sessionData = {
     startTimestamp: null,
     endTimestamp: null,
-    windowSize: { width: 0, height: 0 },
     keyEvents: [],
     mousePaths: [],
     clicks: [],
-    focusChanges: [],
+    heartbeatCount: 0, // Reset heartbeat count for the new session.
   };
 
   keyDownMap.clear();
@@ -61,11 +61,12 @@ async function finalizeAndSendSession() {
     return;
   }
 
+  // Upon finalization, any pending timers must be cleared to prevent potential issues caused by stale timers.
+  clearTimeout(inactivityTimeout);
+  inactivityTimeout = null;
+
   // Set the lock to prevent new events from being processed.
   isFinalizing = true;
-
-  if (inactivityTimeout) clearTimeout(inactivityTimeout);
-  inactivityTimeout = null;
 
   sessionData.endTimestamp = performance.now();
 
@@ -75,48 +76,57 @@ async function finalizeAndSendSession() {
     delete sessionData.currentMousePath;
   }
 
-  // Noise reduction: Ensure the session has meaningful biometric data.
+  // New, more sophisticated session validation logic.
   const totalMeaningfulEvents =
     sessionData.keyEvents.length +
     sessionData.clicks.length +
     sessionData.mousePaths.length;
-  if (totalMeaningfulEvents < MINIMUM_EVENTS_THRESHOLD) {
+  const totalHeartbeats = sessionData.heartbeatCount;
+
+  // Path 1: Session has enough active biometric data.
+  if (totalMeaningfulEvents >= MINIMUM_EVENTS_THRESHOLD) {
+    const dataToSend = JSON.parse(JSON.stringify(sessionData));
+    resetSessionData(); // Reset state before the async network call.
+    isFinalizing = false; // Release lock early for this path.
+
     console.log(
-      `Session ended with only ${totalMeaningfulEvents} meaningful events. Discarding as noise.`,
+      "Active session finalized. Preparing to send aggregated data:",
+      dataToSend,
     );
-    resetSessionData();
-    // Release the lock before returning.
-    isFinalizing = false;
+    try {
+      await handleDataPayload(dataToSend);
+    } catch (error) {
+      console.error("Failed to handle active data payload:", error);
+    }
     return;
   }
 
-  const dataToSend = JSON.parse(JSON.stringify(sessionData));
-
-  // Reset the global session immediately.
-  resetSessionData();
-
-  console.log(
-    "Session finalized. Preparing to send aggregated data:",
-    dataToSend,
-  );
-
-  try {
-    await handleDataPayload(dataToSend);
-  } catch (error) {
-    console.error("Failed to handle data payload:", error);
-  } finally {
-    // IMPORTANT: Release the lock after the entire process is complete.
-    isFinalizing = false;
+  // Path 2: Session has low active events but high passive (scroll) activity.
+  else if (totalHeartbeats >= PASSIVE_SESSION_HEARTBEAT_THRESHOLD) {
+    console.log(
+      `Passive reading session detected (${totalHeartbeats} scrolls) and ignored.`,
+    );
   }
+
+  // Path 3: Session has low active events and low passive activity.
+  else {
+    console.log(
+      `Session with only ${totalMeaningfulEvents} events discarded as noise.`,
+    );
+  }
+
+  // For paths 2 and 3, we simply discard the data and reset.
+  resetSessionData();
+  isFinalizing = false;
 }
 
 // A function to dynamically set the popup based on the system state.
 async function updateActionPopup() {
   const state = await getSystemState();
   if (state === "enrollment") {
-    await chrome.action.setPopup({ popup: "onboarding.html" });
+    await chrome.action.setPopup({ popup: "frontend/dist/index.html?page=onboarding" });
   } else {
-    await chrome.action.setPopup({ popup: "popup.html" });
+    await chrome.action.setPopup({ popup: "frontend/dist/index.html" });
   }
 }
 
@@ -131,7 +141,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       newUUID,
     );
     await updateActionPopup();
-    chrome.tabs.create({ url: "onboarding.html" });
+    chrome.tabs.create({ url: "frontend/dist/index.html?page=onboarding" });
   } else if (details.reason === "update") {
     await updateActionPopup();
   }
@@ -142,8 +152,6 @@ chrome.runtime.onStartup.addListener(async () => {
   isProfilingUnlocked = false; // Always start locked if in profiling mode.
   console.log("Browser startup: Profiling session is locked by default.");
   await updateActionPopup();
-  // On startup, we don't know which tabs will be restored, so we rely on
-  // their content scripts calling `CONTENT_SCRIPT_READY`.
 });
 
 // Listener for new windows to enforce lockdown.
@@ -256,6 +264,13 @@ async function handleContentScriptReady(sender) {
 
 function handleHeartbeat() {
   checkAndSetStartTimestamp(performance.now());
+
+  // Increment the heartbeat count for the current session.
+  if (!sessionData.heartbeatCount) {
+    sessionData.heartbeatCount = 0;
+  }
+  sessionData.heartbeatCount++;
+
   clearTimeout(inactivityTimeout);
   inactivityTimeout = setTimeout(finalizeAndSendSession, INACTIVITY_TIMEOUT_MS);
 }
@@ -342,13 +357,6 @@ function handleRawEvent(event) {
         });
         mousedownEvent = null;
       }
-      break;
-    case "focus":
-    case "blur":
-      sessionData.focusChanges.push({ type: event.eventType, t: event.t });
-      break;
-    case "resize":
-      sessionData.windowSize = { width: event.width, height: event.height };
       break;
   }
 }
