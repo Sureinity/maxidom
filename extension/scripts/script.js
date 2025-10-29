@@ -4,13 +4,13 @@
  * This script is responsible for two main tasks:
  * 1. Forwarding raw user events to the service worker.
  * 2. Injecting and managing the UI overlay, including suppressing all
- *    keyboard interaction with the underlying page during a lockdown.
+ *    keyboard and scroll interaction with the underlying page during a lockdown.
  */
 
 //  Unique ID for the overlay to prevent multiple injections
 const MAXIDOM_OVERLAY_ID = "maxidom-verification-overlay";
 
-let wheelListener = null; // NEW: Listener for scroll events
+let wheelListener = null;
 let keydownListener = null;
 
 //  Function to create and inject the verification overlay with contextual messages
@@ -27,12 +27,13 @@ function showVerificationOverlay(context) {
     },
     profiling_lock: {
       title: "Session Locked",
-      message: "Please enter your password to begin or resume your secure profiling session.",
+      message:
+        "Please enter your password to begin or resume your secure profiling session.",
     },
   };
 
   // Default to the 'anomaly' message if context is unknown
-  const displayMessages = messages[context] || messages['anomaly'];
+  const displayMessages = messages[context] || messages["anomaly"];
 
   // Create overlay elements
   const overlay = document.createElement("div");
@@ -49,8 +50,8 @@ function showVerificationOverlay(context) {
   overlay.style.alignItems = "center";
   overlay.style.color = "white";
   overlay.style.fontFamily = "sans-serif";
-  overlay.style.backdropFilter = 'blur(30px)';
-  overlay.style.webkitBackdropFilter = 'blur(30px)';
+  overlay.style.backdropFilter = "blur(30px)";
+  overlay.style.webkitBackdropFilter = "blur(30px)";
 
   const modal = document.createElement("div");
   modal.style.textAlign = "center";
@@ -73,7 +74,7 @@ function showVerificationOverlay(context) {
   const form = document.createElement("form");
   const passwordInput = document.createElement("input");
   passwordInput.type = "password";
-  passwordInput.id = 'maxidom-password-input';
+  passwordInput.id = "maxidom-password-input";
   passwordInput.placeholder = "Enter your password";
   passwordInput.style.width = "100%";
   passwordInput.style.padding = "10px";
@@ -112,7 +113,6 @@ function showVerificationOverlay(context) {
     if (password) {
       submitButton.disabled = true;
       submitButton.textContent = "Verifying...";
-      // Send the password to the service worker for verification.
       chrome.runtime.sendMessage({
         type: "PASSWORD_SUBMITTED",
         password: password,
@@ -130,26 +130,24 @@ function showVerificationOverlay(context) {
   passwordInput.focus();
 
   keydownListener = (event) => {
-    if (event.target.id === 'maxidom-password-input') {
+    if (event.target.id === "maxidom-password-input") {
       return;
     }
-
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
   };
+  window.addEventListener("keydown", keydownListener, { capture: true });
 
-  window.addEventListener('keydown', keydownListener, { capture: true });
-
-    wheelListener = (event) => {
-    // Unconditionally block all scroll events while the overlay is active.
+  wheelListener = (event) => {
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
   };
-
-  window.addEventListener('wheel', wheelListener, { capture: true, passive: false });
-
+  window.addEventListener("wheel", wheelListener, {
+    capture: true,
+    passive: false,
+  });
 }
 
 //  Function to remove the overlay and the keyboard listener
@@ -158,14 +156,12 @@ function hideVerificationOverlay() {
   if (overlay) {
     overlay.remove();
   }
-
   if (keydownListener) {
-    window.removeEventListener('keydown', keydownListener, { capture: true });
+    window.removeEventListener("keydown", keydownListener, { capture: true });
     keydownListener = null;
   }
-  
   if (wheelListener) {
-    window.removeEventListener('wheel', wheelListener, { capture: true });
+    window.removeEventListener("wheel", wheelListener, { capture: true });
     wheelListener = null;
   }
 }
@@ -222,11 +218,7 @@ document.addEventListener(
     if (event.repeat) return;
     chrome.runtime.sendMessage({
       type: "RAW_EVENT",
-      payload: {
-        eventType: "keydown",
-        t: performance.now(),
-        code: event.code,
-      },
+      payload: { eventType: "keydown", t: performance.now(), code: event.code },
     });
   },
   true,
@@ -237,11 +229,7 @@ document.addEventListener(
   (event) => {
     chrome.runtime.sendMessage({
       type: "RAW_EVENT",
-      payload: {
-        eventType: "keyup",
-        t: performance.now(),
-        code: event.code,
-      },
+      payload: { eventType: "keyup", t: performance.now(), code: event.code },
     });
   },
   true,
@@ -280,6 +268,14 @@ document.addEventListener(
   },
   true,
 );
+
+// This listener sends a specific event when the window loses focus.
+window.addEventListener("blur", () => {
+  chrome.runtime.sendMessage({
+    type: "BLUR_EVENT",
+    payload: { t: performance.now() },
+  });
+});
 
 document.addEventListener(
   "wheel",
