@@ -124,9 +124,9 @@ async function finalizeAndSendSession() {
 async function updateActionPopup() {
   const state = await getSystemState();
   if (state === "enrollment") {
-    await chrome.action.setPopup({ popup: "onboarding.html" });
+    await chrome.action.setPopup({ popup: "frontend/dist/index.html?page=onboarding" });
   } else {
-    await chrome.action.setPopup({ popup: "popup.html" });
+    await chrome.action.setPopup({ popup: "frontend/dist/index.html" });
   }
 }
 
@@ -141,7 +141,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       newUUID,
     );
     await updateActionPopup();
-    chrome.tabs.create({ url: "onboarding.html" });
+    chrome.tabs.create({ url: "frontend/dist/index.html?page=onboarding" });
   } else if (details.reason === "update") {
     await updateActionPopup();
   }

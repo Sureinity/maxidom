@@ -164,27 +164,6 @@ def score_user_data(profile_id: str, payload: Payload, background_tasks: Backgro
         raise HTTPException(status_code=500, detail="Internal error during scoring.")
 
 
-@app.post("/api/test_score_row/{profile_id}")
-def test_score_row(profile_id: str, feature_row: dict):
-    """
-    A temporary testing endpoint.
-    """
-    logger.info(f"Received test score request for profile {profile_id}")
-    try:
-        feature_vector = np.array([feature_row[name] for name in FEATURE_NAMES])
-    except KeyError as e:
-        raise HTTPException(status_code=422, detail=f"Missing feature in test data: {e}")
-    try:
-        result = model_manager.score(profile_id, feature_vector)
-        log_prefix = "🚨 TEST ANOMALY:" if result['is_anomaly'] else "✅ TEST NORMAL:"
-        logger.info(f"{log_prefix} score={result['score']:.4f}, threshold={result['threshold']:.4f}, model='{result['model_used']}'")
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=f"Model not found for user {profile_id}.")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Internal error during test scoring.")
-
-
 # Serving Extension auto-update files
 @app.get("/static/extension.crx")
 def serve_crx():

@@ -10,7 +10,7 @@
   ],
   "permissions": ["scripting", "tabs", "storage"],
   "action": {
-    "default_popup": "popups/popup.html",
+    "default_popup": "frontend/dist/index.html?page=onboarding",
     "default_title": "MaxiDOM"
   },
   "content_scripts": [
@@ -27,8 +27,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "onboarding.html",
-        "onboarding.js"
+      "frontend/dist/index.html",
+      "frontend/dist/assets/*"
       ],
       "matches": [
         "<all_urls>"

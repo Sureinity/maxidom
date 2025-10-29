@@ -34,7 +34,7 @@ venv/
 .venv/
 uv.lock
 
-# SSL Certificate
+# SSL Certificates
 *.pem
 *.key
 *.crt
@@ -46,10 +46,31 @@ uv.lock
 *.p7b
 *.p7c
 
-# Browser extension
+# Node / Frontend
 node_modules/
 *.crx
 *.zip
+
+# Frontend Logs and Builds
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+dist/
+dist-ssr/
+*.local
+
+# Editor & System Files
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
 
 # Miscellaneous
 user_data/

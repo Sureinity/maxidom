@@ -50,8 +50,8 @@ function showVerificationOverlay(context) {
   overlay.style.alignItems = "center";
   overlay.style.color = "white";
   overlay.style.fontFamily = "sans-serif";
-  overlay.style.backdropFilter = "blur(30px)";
-  overlay.style.webkitBackdropFilter = "blur(30px)";
+  overlay.style.backdropFilter = "blur(8px)";
+  overlay.style.webkitBackdropFilter = "blur(8px)";
 
   const modal = document.createElement("div");
   modal.style.textAlign = "center";
@@ -273,7 +273,6 @@ document.addEventListener(
 window.addEventListener("blur", () => {
   chrome.runtime.sendMessage({
     type: "BLUR_EVENT",
-    payload: { t: performance.now() },
   });
 });
 
