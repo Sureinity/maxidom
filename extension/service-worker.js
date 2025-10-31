@@ -182,6 +182,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleProfileReset();
     return; // This is a fire-and-forget message
   }
+  if (message.type === "VERIFY_PASSWORD_FOR_RESET") {
+    (async () => {
+      const uuid = await getProfileUUID();
+      if (!uuid) {
+        sendResponse({ verified: false });
+        return;
+      }
+      try {
+        const response = await fetch(ENDPOINTS.VERIFY_PASSWORD(uuid), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: message.password }),
+        });
+        if (!response.ok) throw new Error("Verification request failed.");
+        const result = await response.json();
+        sendResponse(result); // Sends back {"verified": true/false}
+      } catch (error) {
+        console.error("Verification for reset error:", error);
+        sendResponse({ verified: false });
+      }
+    })();
+    return true; // Keep the message channel open for the async response.
+  }
 
   (async () => {
     const currentState = await getSystemState();

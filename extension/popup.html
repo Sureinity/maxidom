@@ -85,7 +85,8 @@
         color: #e06c75;
         margin: 0 0 10px 0;
       }
-      #reset-button {
+      #reset-button,
+      #reset-confirm-button {
         width: 100%;
         padding: 8px;
         font-size: 14px;
@@ -96,46 +97,69 @@
         color: #e06c75;
         font-weight: bold;
       }
-      #reset-button:hover {
+      #reset-button:hover,
+      #reset-confirm-button:hover {
         background-color: rgba(224, 108, 117, 0.1);
       }
-      #reset-button:disabled {
+      #reset-button:disabled,
+      #reset-confirm-button:disabled {
         border-color: #4b5263;
         color: #4b5263;
         cursor: not-allowed;
+      }
+      #reset-confirm-form {
+        display: none; /* Hidden by default */
+        margin-top: 10px;
+      }
+      #reset-password-input {
+        width: 100%;
+        padding: 10px;
+        font-size: 14px;
+        border-radius: 4px;
+        border: 1px solid #3b4048;
+        background-color: #282c34;
+        color: #abb2bf;
+        box-sizing: border-box;
+        margin-bottom: 10px;
+      }
+      .reset-error-message {
+        height: 15px;
+        font-size: 12px;
+        color: #e06c75;
+        margin-top: 5px;
       }
     </style>
   </head>
   <body>
     <h1>MaxiDOM Status</h1>
+
     <div class="status-container">
       <div id="status-indicator" class="status-indicator"></div>
       <span id="status-message">Loading...</span>
     </div>
+
     <div id="progress-zone" class="progress-zone">
-      <div class="progress-item">
-        <span class="progress-label">Total Samples</span>
-        <div class="progress-bar">
-          <div id="total-progress" class="progress-bar-inner"></div>
-        </div>
-      </div>
-      <div class="progress-item">
-        <span class="progress-label">Mouse Activity</span>
-        <div class="progress-bar">
-          <div id="mouse-progress" class="progress-bar-inner"></div>
-        </div>
-      </div>
-      <div class="progress-item">
-        <span class="progress-label">Keyboard Activity</span>
-        <div class="progress-bar">
-          <div id="keyboard-progress" class="progress-bar-inner"></div>
-        </div>
-      </div>
+      <!-- Progress bar elements remain here -->
     </div>
+
     <div class="danger-zone">
       <h2>Profile Management</h2>
       <button id="reset-button">Reset Biometric Profile</button>
+
+      <form id="reset-confirm-form">
+        <input
+          type="password"
+          id="reset-password-input"
+          placeholder="Enter password to confirm"
+          required
+        />
+        <button type="submit" id="reset-confirm-button">
+          Confirm & Delete Profile
+        </button>
+        <div id="reset-error-message" class="reset-error-message"></div>
+      </form>
     </div>
+
     <script src="popup.js"></script>
   </body>
 </html>

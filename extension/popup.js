@@ -7,6 +7,12 @@ const totalProgress = document.getElementById("total-progress");
 const mouseProgress = document.getElementById("mouse-progress");
 const keyboardProgress = document.getElementById("keyboard-progress");
 
+// Elements for the confirmation form
+const resetConfirmForm = document.getElementById("reset-confirm-form");
+const resetPasswordInput = document.getElementById("reset-password-input");
+const resetConfirmButton = document.getElementById("reset-confirm-button");
+const resetErrorMessage = document.getElementById("reset-error-message");
+
 // Immediately request the system status from the service worker when the popup opens.
 chrome.runtime.sendMessage({ type: "REQUEST_PROFILING_STATUS" }, (response) => {
   if (chrome.runtime.lastError) {
@@ -28,21 +34,55 @@ chrome.runtime.sendMessage({ type: "REQUEST_PROFILING_STATUS" }, (response) => {
   }
 });
 
-// Add click listener for the reset button
+// Step 1: User clicks the initial reset button
 resetButton.addEventListener("click", () => {
-  // CRITICAL: Always ask for confirmation before a destructive action.
-  const isConfirmed = window.confirm(
-    "Are you sure you want to reset your biometric profile? All learned data will be permanently deleted. You will need to set a new password and re-profile your behavior.",
-  );
+  // Hide the initial button and show the confirmation form
+  resetButton.style.display = "none";
+  resetConfirmForm.style.display = "block";
+  resetPasswordInput.focus();
+});
 
-  if (isConfirmed) {
-    resetButton.disabled = true;
-    resetButton.textContent = "Resetting...";
-    // Send the reset command to the service worker
-    chrome.runtime.sendMessage({ type: "RESET_PROFILE" });
-    // The popup will close. The service worker will handle opening the onboarding tab.
-    setTimeout(() => window.close(), 500);
+// Step 2: User submits the password confirmation form
+resetConfirmForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const password = resetPasswordInput.value;
+
+  if (!password) {
+    resetErrorMessage.textContent = "Password is required.";
+    return;
   }
+
+  resetConfirmButton.disabled = true;
+  resetConfirmButton.textContent = "Verifying...";
+  resetErrorMessage.textContent = "";
+
+  // Step 2a: Send password to the service worker for verification
+  chrome.runtime.sendMessage(
+    { type: "VERIFY_PASSWORD_FOR_RESET", password: password },
+    (response) => {
+      if (chrome.runtime.lastError) {
+        resetErrorMessage.textContent = `Error: ${chrome.runtime.lastError.message}`;
+        resetConfirmButton.disabled = false;
+        resetConfirmButton.textContent = "Confirm & Delete Profile";
+        return;
+      }
+
+      if (response && response.verified) {
+        // Step 2b: If verification is successful, send the final reset command
+        resetConfirmButton.textContent = "Deleting Profile...";
+        chrome.runtime.sendMessage({ type: "RESET_PROFILE" });
+        setTimeout(() => window.close(), 500);
+      } else {
+        // If verification fails, show an error and re-enable the form
+        resetErrorMessage.textContent =
+          "Incorrect password. Profile not reset.";
+        resetConfirmButton.disabled = false;
+        resetConfirmButton.textContent = "Confirm & Delete Profile";
+        resetPasswordInput.value = "";
+        resetPasswordInput.focus();
+      }
+    },
+  );
 });
 
 function updatePopupUI(state, progress) {
