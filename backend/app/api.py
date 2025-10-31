@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Body
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Body, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -101,6 +101,32 @@ def verify_user_password(profile_id: str, data: dict = Body(...)):
         logger.warning(f"Password verification FAILED for profile: {profile_id}")
         
     return {"verified": is_verified}
+
+
+@app.delete("/api/reset_profile/{profile_id}")
+def reset_biometric_profile(profile_id: str, response: Response):
+    """
+    Resets a user's biometric profile by deleting all learned behavioral data.
+    This action does NOT delete the user's account or password.
+    """
+    logger.warning(f"Received request to RESET BIOMETRIC PROFILE for: {profile_id}")
+    
+    # This DOES NOT delete the user's credentials from the database.
+    # The user's account and password remain intact.
+
+    # It ONLY delete the entire user data directory from the file system.
+    # This includes models, feature CSVs, and raw data archives.
+    data_deleted = model_manager.delete_user_data(profile_id)
+
+    if not data_deleted:
+        # This can happen if the directory didn't exist in the first place, which is fine,
+        # or if there was a file system error.
+        logger.warning(f"No biometric data directory found for profile {profile_id} to reset, or an error occurred.")
+        # Even if no files were deleted, we can return success as the state is now clean.
+    
+    logger.info(f"Biometric profile for {profile_id} has been successfully reset.")
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
 
 
 # Biometric Processing Endpoints

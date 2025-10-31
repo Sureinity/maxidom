@@ -4,6 +4,7 @@ import {
   getSystemState,
   setSystemState,
   setProfilingProgress,
+  clearProfilingProgress,
 } from "./utils/helpers.js";
 
 // Hybrid Model Constants
@@ -12,7 +13,7 @@ const INACTIVITY_TIMEOUT_MS = 5000; // Primary trigger: End session after 5s of 
 const MAX_SESSION_DURATION_MS = 90000; // Safety Net 1: Force end session after 90s.
 const MAX_EVENT_COUNT = 2000; // Safety Net 2: Force end session after 2000 events.
 const MINIMUM_EVENTS_THRESHOLD = 20; // Noise Reduction: Discard sessions with too few meaningful events.
-const PASSIVE_SESSION_HEARTBEAT_THRESHOLD = 10; // New threshold to identify passive (scrolling) sessions.
+const PASSIVE_SESSION_HEARTBEAT_THRESHOLD = 10; // Threshold to identify passive (scrolling) sessions.
 
 // Global State
 let sessionData = {};
@@ -37,7 +38,7 @@ function resetSessionData() {
     keyEvents: [],
     mousePaths: [],
     clicks: [],
-    heartbeatCount: 0, // Reset heartbeat count for the new session.
+    heartbeatCount: 0,
   };
 
   keyDownMap.clear();
@@ -60,14 +61,11 @@ async function finalizeAndSendSession() {
   if (isFinalizing || !sessionData.startTimestamp) {
     return;
   }
-
-  // Upon finalization, any pending timers must be cleared to prevent potential issues caused by stale timers.
   clearTimeout(inactivityTimeout);
   inactivityTimeout = null;
 
   // Set the lock to prevent new events from being processed.
   isFinalizing = true;
-
   sessionData.endTimestamp = performance.now();
 
   // Finalize any pending mouse path before sending.
@@ -76,7 +74,7 @@ async function finalizeAndSendSession() {
     delete sessionData.currentMousePath;
   }
 
-  // New, more sophisticated session validation logic.
+  // Sophisticated session validation logic.
   const totalMeaningfulEvents =
     sessionData.keyEvents.length +
     sessionData.clicks.length +
@@ -149,7 +147,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
 // Listener for when the browser starts up. This is our primary LOCK trigger.
 chrome.runtime.onStartup.addListener(async () => {
-  isProfilingUnlocked = false; // Always start locked if in profiling mode.
+  isProfilingUnlocked = false;
   console.log("Browser startup: Profiling session is locked by default.");
   await updateActionPopup();
 });
@@ -161,7 +159,6 @@ chrome.windows.onCreated.addListener(async (window) => {
     const tabs = await chrome.tabs.query({ active: true, windowId: window.id });
     if (tabs[0]) {
       setTimeout(() => {
-        // Send the correct context for the profiling lock
         chrome.tabs.sendMessage(tabs[0].id, {
           action: "SHOW_OVERLAY",
           context: "profiling_lock",
@@ -181,22 +178,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleProfilingStatusRequest(sendResponse);
     return true;
   }
+  if (message.type === "RESET_PROFILE") {
+    handleProfileReset();
+    return; // This is a fire-and-forget message
+  }
 
   (async () => {
     const currentState = await getSystemState();
 
-    if (currentState === "profiling" && !isProfilingUnlocked) {
+    if (
+      (currentState === "profiling" && !isProfilingUnlocked) ||
+      currentState === "awaiting_verification"
+    ) {
       if (message.type === "PASSWORD_SUBMITTED") {
-        handlePasswordVerification(message.password, "profiling_unlock");
-      } else if (message.type === "CONTENT_SCRIPT_READY") {
-        await handleContentScriptReady(sender);
-      }
-      return;
-    }
-
-    if (currentState === "awaiting_verification") {
-      if (message.type === "PASSWORD_SUBMITTED") {
-        handlePasswordVerification(message.password, "anomaly_response");
+        const context =
+          currentState === "profiling"
+            ? "profiling_unlock"
+            : "anomaly_response";
+        handlePasswordVerification(message.password, context);
       } else if (message.type === "CONTENT_SCRIPT_READY") {
         await handleContentScriptReady(sender);
       }
@@ -211,6 +210,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       handleRawEvent(message.payload);
     } else if (message.type === "HEARTBEAT") {
       handleHeartbeat();
+    } else if (message.type === "BLUR_EVENT") {
+      if (keyDownMap.size > 0) {
+        console.log(
+          "Window blurred. Clearing dangling keydown events to prevent corruption.",
+        );
+        keyDownMap.clear();
+      }
     }
   })();
 
@@ -237,13 +243,11 @@ async function broadcastToTabs(message) {
 async function handleContentScriptReady(sender) {
   const currentState = await getSystemState();
   let context = null;
-
   if (currentState === "awaiting_verification") {
     context = "anomaly";
   } else if (currentState === "profiling" && !isProfilingUnlocked) {
     context = "profiling_lock";
   }
-
   if (context) {
     console.log(
       `New tab opened during lockdown (ID: ${sender.tab.id}). Injecting overlay with context: ${context}.`,
@@ -270,7 +274,6 @@ function handleHeartbeat() {
     sessionData.heartbeatCount = 0;
   }
   sessionData.heartbeatCount++;
-
   clearTimeout(inactivityTimeout);
   inactivityTimeout = setTimeout(finalizeAndSendSession, INACTIVITY_TIMEOUT_MS);
 }
@@ -292,16 +295,13 @@ async function handleProfilingStatusRequest(sendResponse) {
 // Main Event Aggregation Logic
 function handleRawEvent(event) {
   checkAndSetStartTimestamp(event.t);
-
   clearTimeout(inactivityTimeout);
   inactivityTimeout = setTimeout(finalizeAndSendSession, INACTIVITY_TIMEOUT_MS);
-
   const sessionDuration = event.t - (sessionData.startTimestamp || event.t);
   const roughEventCount =
     (sessionData.keyEvents?.length || 0) +
     (sessionData.clicks?.length || 0) +
     (sessionData.mousePaths?.length || 0);
-
   if (
     sessionDuration > MAX_SESSION_DURATION_MS ||
     roughEventCount > MAX_EVENT_COUNT
@@ -312,7 +312,6 @@ function handleRawEvent(event) {
     finalizeAndSendSession();
     return;
   }
-
   switch (event.eventType) {
     case "mousemove":
       if (!sessionData.currentMousePath) sessionData.currentMousePath = [];
@@ -365,10 +364,8 @@ function handleRawEvent(event) {
 async function handleDataPayload(payload) {
   const uuid = await getProfileUUID();
   if (!uuid) throw new Error("Profile UUID not found.");
-
   const { userId, ...payloadToSend } = payload;
   const state = await getSystemState();
-
   if (state === "profiling") {
     await handleProfiling(ENDPOINTS.TRAIN(uuid), payloadToSend);
   } else if (state === "detection") {
@@ -385,11 +382,9 @@ async function handleProfiling(endpoint, payload) {
       body: JSON.stringify(payload),
     });
     if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-
     const data = await response.json();
     await setProfilingProgress(data.progress);
     console.log("Profiling progress updated:", data.progress);
-
     if (data.progress.is_ready) {
       console.log(
         "Profile readiness conditions met. Transitioning to DETECTION state.",
@@ -409,7 +404,6 @@ async function handleDetection(endpoint, payload, uuid) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-
     if (response.status === 404) {
       console.warn("Model not found (404). Resetting to PROFILING state.");
       await setSystemState("profiling");
@@ -417,15 +411,11 @@ async function handleDetection(endpoint, payload, uuid) {
       return;
     }
     if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-
     const data = await response.json();
     if (data.is_anomaly) {
       console.warn("⚠️ ANOMALY DETECTED! Initiating lockdown.", data);
-
       clearTimeout(inactivityTimeout);
-
       await setSystemState("awaiting_verification");
-      // Send the 'anomaly' context when an anomaly is detected.
       await broadcastToTabs({ action: "SHOW_OVERLAY", context: "anomaly" });
     } else {
       console.log("Normal behavior detected.", data);
@@ -465,7 +455,6 @@ async function handleEnrollment(password, sendResponse) {
 async function handlePasswordVerification(password, context) {
   const uuid = await getProfileUUID();
   if (!uuid) return;
-
   try {
     const response = await fetch(ENDPOINTS.VERIFY_PASSWORD(uuid), {
       method: "POST",
@@ -473,7 +462,6 @@ async function handlePasswordVerification(password, context) {
       body: JSON.stringify({ password: password }),
     });
     if (!response.ok) throw new Error("Verification request failed.");
-
     const result = await response.json();
     if (result.verified) {
       console.log("Password verification successful.");
@@ -481,7 +469,6 @@ async function handlePasswordVerification(password, context) {
         isProfilingUnlocked = true;
         console.log("Profiling unlocked for this browser session.");
       } else {
-        // anomaly_response
         await setSystemState("detection");
         console.log("Resuming normal operation.");
       }
@@ -502,6 +489,59 @@ async function handlePasswordVerification(password, context) {
   }
 }
 
+// Handler for the Profile Reset Logic
+async function handleProfileReset() {
+  const uuid = await getProfileUUID();
+  if (!uuid) {
+    console.error("Cannot reset profile: No UUID found.");
+    return;
+  }
+
+  console.log(`Initiating profile reset for ${uuid}...`);
+
+  try {
+    // Call the backend to delete all biometric data (models, csv files, etc.)
+    const response = await fetch(ENDPOINTS.RESET_PROFILE(uuid), {
+      method: "DELETE",
+    });
+
+    if (!response.ok && response.status !== 404) {
+      throw new Error(`Backend reset failed with status: ${response.status}`);
+    }
+
+    console.log(
+      "Backend data successfully deleted. Resetting local extension state.",
+    );
+
+    // Set the state to 'profiling'.
+    await setSystemState("profiling");
+
+    // Clear any old profiling progress data.
+    await clearProfilingProgress();
+
+    // Ensure the lockdown is active for the new profiling session.
+    isProfilingUnlocked = false;
+
+    // Update the popup to the normal UI (it will show profiling progress).
+    await updateActionPopup();
+
+    // 5. DO NOT open onboarding.html. Instead, broadcast the lockdown command
+    // to all open tabs, forcing the user to re-authenticate to begin profiling.
+    await broadcastToTabs({
+      action: "SHOW_OVERLAY",
+      context: "profiling_lock",
+    });
+  } catch (error) {
+    console.error("An error occurred during profile reset:", error);
+    // Notify the user that the reset failed.
+    chrome.notifications.create({
+      type: "basic",
+      iconUrl: "icons/icon128.png",
+      title: "MaxiDOM Error",
+      message:
+        "Failed to reset your profile. Please check the console for details.",
+    });
+  }
+}
 // Initial check when the service worker starts
 updateActionPopup();
-

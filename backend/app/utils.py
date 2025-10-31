@@ -7,6 +7,7 @@ from pathlib import Path
 import joblib
 import logging
 import json
+import shutil
 from typing import Dict, List, Any
 
 logger = logging.getLogger(__name__)
@@ -287,4 +288,28 @@ class UserModelManager:
             return True
         except Exception as e:
             logger.error(f"Error retraining model for user {profile_id}: {e}", exc_info=True)
+            return False
+        
+    def delete_user_data(self, profile_id: str) -> bool:
+        """
+        Permanently deletes all data associated with a profile ID, including
+        models, feature pools, and raw data archives.
+        
+        Args:
+            profile_id: The user's unique identifier.
+            
+        Returns:
+            True if deletion was successful or directory didn't exist, False on error.
+        """
+        user_dir = self._get_user_dir(profile_id)
+        if not user_dir.exists():
+            logger.info(f"No data directory to delete for profile: {profile_id}")
+            return True
+        
+        try:
+            shutil.rmtree(user_dir)
+            logger.info(f"Successfully deleted all data for profile: {profile_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete data directory for profile {profile_id}: {e}", exc_info=True)
             return False

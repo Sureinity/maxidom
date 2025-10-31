@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>MaxiDOM Status</title>
+    <style>
+      body {
+        width: 300px;
+        font-family: sans-serif;
+        background-color: #282c34;
+        color: #abb2bf;
+        padding: 15px;
+        margin: 0;
+      }
+      h1 {
+        font-size: 18px;
+        color: #61afef;
+        margin: 0 0 15px 0;
+        border-bottom: 1px solid #3b4048;
+        padding-bottom: 10px;
+        text-align: center;
+      }
+      .status-container {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 15px;
+      }
+      .status-indicator {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        margin-right: 10px;
+        background-color: #4b5263; /* Default grey */
+      }
+      .status-indicator.status-active {
+        background-color: #98c379;
+      } /* Green */
+      .status-indicator.status-profiling {
+        background-color: #e5c07b;
+      } /* Yellow */
+      .status-indicator.status-enrollment {
+        background-color: #e06c75;
+      } /* Red */
+
+      #status-message {
+        font-size: 16px;
+        font-weight: bold;
+      }
+
+      .progress-zone {
+        display: none; /* Hidden by default */
+        margin-top: 15px;
+      }
+      .progress-item {
+        margin-bottom: 8px;
+      }
+      .progress-label {
+        font-size: 12px;
+        display: block;
+        margin-bottom: 4px;
+      }
+      .progress-bar {
+        width: 100%;
+        height: 8px;
+        background-color: #3b4048;
+        border-radius: 4px;
+        overflow: hidden;
+      }
+      .progress-bar-inner {
+        height: 100%;
+        width: 0%; /* Default to 0 */
+        background-color: #61afef;
+        border-radius: 4px;
+        transition: width 0.3s ease-in-out;
+      }
+
+      .danger-zone {
+        margin-top: 20px;
+        padding-top: 15px;
+        border-top: 1px solid #3b4048;
+      }
+      .danger-zone h2 {
+        font-size: 14px;
+        color: #e06c75;
+        margin: 0 0 10px 0;
+      }
+      #reset-button {
+        width: 100%;
+        padding: 8px;
+        font-size: 14px;
+        cursor: pointer;
+        border: 1px solid #e06c75;
+        border-radius: 4px;
+        background-color: transparent;
+        color: #e06c75;
+        font-weight: bold;
+      }
+      #reset-button:hover {
+        background-color: rgba(224, 108, 117, 0.1);
+      }
+      #reset-button:disabled {
+        border-color: #4b5263;
+        color: #4b5263;
+        cursor: not-allowed;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>MaxiDOM Status</h1>
+    <div class="status-container">
+      <div id="status-indicator" class="status-indicator"></div>
+      <span id="status-message">Loading...</span>
+    </div>
+    <div id="progress-zone" class="progress-zone">
+      <div class="progress-item">
+        <span class="progress-label">Total Samples</span>
+        <div class="progress-bar">
+          <div id="total-progress" class="progress-bar-inner"></div>
+        </div>
+      </div>
+      <div class="progress-item">
+        <span class="progress-label">Mouse Activity</span>
+        <div class="progress-bar">
+          <div id="mouse-progress" class="progress-bar-inner"></div>
+        </div>
+      </div>
+      <div class="progress-item">
+        <span class="progress-label">Keyboard Activity</span>
+        <div class="progress-bar">
+          <div id="keyboard-progress" class="progress-bar-inner"></div>
+        </div>
+      </div>
+    </div>
+    <div class="danger-zone">
+      <h2>Profile Management</h2>
+      <button id="reset-button">Reset Biometric Profile</button>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -7,6 +7,7 @@ export const ENDPOINTS = {
   SCORE: (uuid) => `${BASE_URL}/score/${uuid}`,
   ENROLL: (uuid) => `${BASE_URL}/enroll/${uuid}`,
   VERIFY_PASSWORD: (uuid) => `${BASE_URL}/verify_password/${uuid}`,
+  RESET_PROFILE: (uuid) => `${BASE_URL}/reset_profile/${uuid}`,
 };
 
 // Storage Getters
@@ -17,8 +18,7 @@ export async function getProfileUUID() {
 
 export async function getSystemState() {
   const result = await chrome.storage.local.get("system_state");
-  // The new default state for any user without a state is 'enrollment'.
-  return result.system_state || "enrollment"; 
+  return result.system_state || "enrollment";
 }
 
 // Storage Setters
@@ -30,4 +30,10 @@ export async function setSystemState(newState) {
 // Store the detailed progress object from the backend
 export async function setProfilingProgress(progress) {
   await chrome.storage.local.set({ profiling_progress: progress });
+}
+
+// Clear the profiling progress on reset.
+export async function clearProfilingProgress() {
+  await chrome.storage.local.remove("profiling_progress");
+  console.log("Profiling progress has been cleared.");
 }
