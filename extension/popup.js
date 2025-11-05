@@ -1,79 +1,135 @@
-// Get DOM elements
+// Get DOM elements for status
 const statusIndicator = document.getElementById("status-indicator");
 const statusMessage = document.getElementById("status-message");
-const resetButton = document.getElementById("reset-button");
 const progressZone = document.getElementById("progress-zone");
-const totalProgress = document.getElementById("total-progress");
-const mouseProgress = document.getElementById("mouse-progress");
-const keyboardProgress = document.getElementById("keyboard-progress");
 
-// Elements for the confirmation form
+// Get DOM elements for profile management
+const resetButton = document.getElementById("reset-button");
+const changePasswordButton = document.getElementById("change-password-button");
+
+// Get DOM elements for the reset form
 const resetConfirmForm = document.getElementById("reset-confirm-form");
 const resetPasswordInput = document.getElementById("reset-password-input");
 const resetConfirmButton = document.getElementById("reset-confirm-button");
 const resetErrorMessage = document.getElementById("reset-error-message");
 
-// Immediately request the system status from the service worker when the popup opens.
+// Get DOM elements for the change password form
+const changePasswordForm = document.getElementById("change-password-form");
+const currentPasswordInput = document.getElementById("current-password-input");
+const newPasswordInput = document.getElementById("new-password-input");
+const confirmNewPasswordInput = document.getElementById(
+  "confirm-new-password-input",
+);
+const changePasswordSubmit = document.getElementById("change-password-submit");
+const changePasswordMessage = document.getElementById(
+  "change-password-message",
+);
+
+// Immediately request system status when the popup opens
 chrome.runtime.sendMessage({ type: "REQUEST_PROFILING_STATUS" }, (response) => {
   if (chrome.runtime.lastError) {
-    // Handle cases where the service worker might not be active
     statusMessage.textContent = "Error connecting to service.";
     console.error(chrome.runtime.lastError);
     return;
   }
-
-  // Update the UI based on the response
   updatePopupUI(response.system_state, response.profiling_progress);
-
-  // If enrollment is needed, this popup will automatically close because
-  // the service worker will have already opened the full onboarding tab.
   if (response.system_state === "enrollment") {
-    // The service worker handles opening the onboarding tab on install.
-    // This just ensures the popup closes if opened manually.
     setTimeout(() => window.close(), 200);
   }
 });
 
-// Step 1: User clicks the initial reset button
-resetButton.addEventListener("click", () => {
-  // Hide the initial button and show the confirmation form
+// Show the Change Password form
+changePasswordButton.addEventListener("click", () => {
+  resetConfirmForm.style.display = "none"; // Hide other forms
+  changePasswordForm.style.display = "block";
+  changePasswordButton.style.display = "none";
   resetButton.style.display = "none";
+  currentPasswordInput.focus();
+});
+
+// Show the Reset Profile confirmation form
+resetButton.addEventListener("click", () => {
+  changePasswordForm.style.display = "none"; // Hide other forms
   resetConfirmForm.style.display = "block";
+  changePasswordButton.style.display = "none";
+  resetButton.style.display = "none";
   resetPasswordInput.focus();
 });
 
-// Step 2: User submits the password confirmation form
+// Handle the Change Password form submission
+changePasswordForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const oldPassword = currentPasswordInput.value;
+  const newPassword = newPasswordInput.value;
+  const confirmPassword = confirmNewPasswordInput.value;
+
+  changePasswordMessage.className = "message-area";
+  changePasswordMessage.textContent = "";
+
+  if (!oldPassword || !newPassword || !confirmPassword) {
+    changePasswordMessage.textContent = "All fields are required.";
+    changePasswordMessage.classList.add("error-message");
+    return;
+  }
+  if (newPassword.length < 8) {
+    changePasswordMessage.textContent =
+      "New password must be at least 8 characters.";
+    changePasswordMessage.classList.add("error-message");
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    changePasswordMessage.textContent = "New passwords do not match.";
+    changePasswordMessage.classList.add("error-message");
+    return;
+  }
+
+  changePasswordSubmit.disabled = true;
+  changePasswordSubmit.textContent = "Saving...";
+
+  chrome.runtime.sendMessage(
+    { type: "CHANGE_PASSWORD", oldPassword, newPassword },
+    (response) => {
+      if (chrome.runtime.lastError || !response) {
+        changePasswordMessage.textContent = `Error: ${chrome.runtime.lastError?.message || "No response."}`;
+        changePasswordMessage.classList.add("error-message");
+      } else if (response.success) {
+        changePasswordMessage.textContent = "Password changed successfully!";
+        changePasswordMessage.classList.add("success-message");
+        setTimeout(() => window.close(), 1500);
+      } else {
+        changePasswordMessage.textContent = `Error: ${response.error}`;
+        changePasswordMessage.classList.add("error-message");
+      }
+      changePasswordSubmit.disabled = false;
+      changePasswordSubmit.textContent = "Save New Password";
+    },
+  );
+});
+
+// Handle the Reset Profile form submission
 resetConfirmForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const password = resetPasswordInput.value;
-
   if (!password) {
     resetErrorMessage.textContent = "Password is required.";
     return;
   }
-
   resetConfirmButton.disabled = true;
   resetConfirmButton.textContent = "Verifying...";
   resetErrorMessage.textContent = "";
 
-  // Step 2a: Send password to the service worker for verification
   chrome.runtime.sendMessage(
     { type: "VERIFY_PASSWORD_FOR_RESET", password: password },
     (response) => {
-      if (chrome.runtime.lastError) {
-        resetErrorMessage.textContent = `Error: ${chrome.runtime.lastError.message}`;
+      if (chrome.runtime.lastError || !response) {
+        resetErrorMessage.textContent = `Error: ${chrome.runtime.lastError?.message || "No response."}`;
         resetConfirmButton.disabled = false;
         resetConfirmButton.textContent = "Confirm & Delete Profile";
-        return;
-      }
-
-      if (response && response.verified) {
-        // Step 2b: If verification is successful, send the final reset command
+      } else if (response.verified) {
         resetConfirmButton.textContent = "Deleting Profile...";
         chrome.runtime.sendMessage({ type: "RESET_PROFILE" });
         setTimeout(() => window.close(), 500);
       } else {
-        // If verification fails, show an error and re-enable the form
         resetErrorMessage.textContent =
           "Incorrect password. Profile not reset.";
         resetConfirmButton.disabled = false;

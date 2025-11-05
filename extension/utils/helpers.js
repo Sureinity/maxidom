@@ -8,6 +8,7 @@ export const ENDPOINTS = {
   ENROLL: (uuid) => `${BASE_URL}/enroll/${uuid}`,
   VERIFY_PASSWORD: (uuid) => `${BASE_URL}/verify_password/${uuid}`,
   RESET_PROFILE: (uuid) => `${BASE_URL}/reset_profile/${uuid}`,
+  CHANGE_PASSWORD: (uuid) => `${BASE_URL}/profile/${uuid}/password`,
 };
 
 // Storage Getters

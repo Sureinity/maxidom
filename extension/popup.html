@@ -48,8 +48,10 @@
         font-weight: bold;
       }
 
-      .progress-zone {
-        display: none; /* Hidden by default */
+      .progress-zone,
+      #change-password-form,
+      #reset-confirm-form {
+        display: none; /* All optional sections are hidden by default */
         margin-top: 15px;
       }
       .progress-item {
@@ -69,7 +71,7 @@
       }
       .progress-bar-inner {
         height: 100%;
-        width: 0%; /* Default to 0 */
+        width: 0%;
         background-color: #61afef;
         border-radius: 4px;
         transition: width 0.3s ease-in-out;
@@ -85,33 +87,48 @@
         color: #e06c75;
         margin: 0 0 10px 0;
       }
-      #reset-button,
+
+      .management-button,
+      #change-password-submit,
       #reset-confirm-button {
         width: 100%;
         padding: 8px;
         font-size: 14px;
         cursor: pointer;
-        border: 1px solid #e06c75;
         border-radius: 4px;
-        background-color: transparent;
-        color: #e06c75;
         font-weight: bold;
       }
-      #reset-button:hover,
-      #reset-confirm-button:hover {
+      .management-button {
+        border: 1px solid #61afef;
+        background-color: transparent;
+        color: #61afef;
+        margin-bottom: 10px;
+      }
+      .management-button:hover {
+        background-color: rgba(97, 175, 239, 0.1);
+      }
+
+      #reset-button {
+        border: 1px solid #e06c75;
+        background-color: transparent;
+        color: #e06c75;
+      }
+      #reset-button:hover {
         background-color: rgba(224, 108, 117, 0.1);
       }
-      #reset-button:disabled,
-      #reset-confirm-button:disabled {
-        border-color: #4b5263;
-        color: #4b5263;
-        cursor: not-allowed;
+
+      #change-password-submit {
+        background-color: #98c379;
+        color: white;
+        border: none;
       }
-      #reset-confirm-form {
-        display: none; /* Hidden by default */
-        margin-top: 10px;
+      #reset-confirm-button {
+        background-color: #e06c75;
+        color: white;
+        border: none;
       }
-      #reset-password-input {
+
+      input[type="password"] {
         width: 100%;
         padding: 10px;
         font-size: 14px;
@@ -122,11 +139,16 @@
         box-sizing: border-box;
         margin-bottom: 10px;
       }
-      .reset-error-message {
+      .message-area {
         height: 15px;
         font-size: 12px;
-        color: #e06c75;
         margin-top: 5px;
+      }
+      .error-message {
+        color: #e06c75;
+      }
+      .success-message {
+        color: #98c379;
       }
     </style>
   </head>
@@ -139,24 +161,54 @@
     </div>
 
     <div id="progress-zone" class="progress-zone">
-      <!-- Progress bar elements remain here -->
+      <!-- Progress bars go here -->
     </div>
 
     <div class="danger-zone">
       <h2>Profile Management</h2>
-      <button id="reset-button">Reset Biometric Profile</button>
+      <button id="change-password-button" class="management-button">
+        Change Password
+      </button>
+      <button id="reset-button" class="management-button">
+        Reset Biometric Profile
+      </button>
+
+      <form id="change-password-form">
+        <input
+          type="password"
+          id="current-password-input"
+          placeholder="Current Password"
+          required
+        />
+        <input
+          type="password"
+          id="new-password-input"
+          placeholder="New Password"
+          required
+        />
+        <input
+          type="password"
+          id="confirm-new-password-input"
+          placeholder="Confirm New Password"
+          required
+        />
+        <button type="submit" id="change-password-submit">
+          Save New Password
+        </button>
+        <div id="change-password-message" class="message-area"></div>
+      </form>
 
       <form id="reset-confirm-form">
         <input
           type="password"
           id="reset-password-input"
-          placeholder="Enter password to confirm"
+          placeholder="Enter password to confirm reset"
           required
         />
         <button type="submit" id="reset-confirm-button">
           Confirm & Delete Profile
         </button>
-        <div id="reset-error-message" class="reset-error-message"></div>
+        <div id="reset-error-message" class="message-area error-message"></div>
       </form>
     </div>
 

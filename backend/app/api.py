@@ -7,7 +7,7 @@ import numpy as np
 import logging
 import sys
 
-from database import init_db, save_user_hash, get_user_hash
+from database import init_db, save_user_hash, get_user_hash, update_user_hash
 from security import get_password_hash, verify_password
 from models import Payload
 from feature_extraction import FeatureExtractor
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="MaxiDOM Behavioral Biometrics API",
     description="API for training and scoring user behavioral profiles.",
-    version="2.3.1-static"
+    version="2.4.0-changepw"
 )
 
 # Call the database initializer on application startup
@@ -101,6 +101,39 @@ def verify_user_password(profile_id: str, data: dict = Body(...)):
         logger.warning(f"Password verification FAILED for profile: {profile_id}")
         
     return {"verified": is_verified}
+
+
+@app.put("/api/profile/{profile_id}/password")
+def change_password(profile_id: str, data: dict = Body(...)):
+    """
+    Allows an authenticated user to change their password.
+    Requires the user's current password for authorization.
+    """
+    old_password = data.get("old_password")
+    new_password = data.get("new_password")
+
+    if not old_password or not new_password:
+        raise HTTPException(status_code=422, detail="Both 'old_password' and 'new_password' are required.")
+    
+    # Verify the user's identity by checking their old password
+    stored_hash = get_user_hash(profile_id)
+    if not stored_hash:
+        raise HTTPException(status_code=404, detail="User profile not found or not enrolled.")
+    
+    if not verify_password(old_password, stored_hash):
+        logger.warning(f"FAILED password change attempt for profile: {profile_id} (Incorrect old password)")
+        raise HTTPException(status_code=403, detail="Incorrect current password.")
+    
+    # If verification succeeds, hash and update the new password
+    new_hash = get_password_hash(new_password)
+    success = update_user_hash(profile_id, new_hash)
+
+    if not success:
+        logger.error(f"Failed to update password in database for profile: {profile_id}")
+        raise HTTPException(status_code=500, detail="Failed to update password.")
+
+    logger.info(f"Successfully changed password for profile: {profile_id}")
+    return {"status": "password changed successfully"}
 
 
 @app.delete("/api/reset_profile/{profile_id}")

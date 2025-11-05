@@ -180,7 +180,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === "RESET_PROFILE") {
     handleProfileReset();
-    return; // This is a fire-and-forget message
+    return;
   }
   if (message.type === "VERIFY_PASSWORD_FOR_RESET") {
     (async () => {
@@ -195,15 +195,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ password: message.password }),
         });
-        if (!response.ok) throw new Error("Verification request failed.");
         const result = await response.json();
-        sendResponse(result); // Sends back {"verified": true/false}
+        sendResponse(result);
       } catch (error) {
-        console.error("Verification for reset error:", error);
         sendResponse({ verified: false });
       }
     })();
-    return true; // Keep the message channel open for the async response.
+    return true;
+  }
+  if (message.type === "CHANGE_PASSWORD") {
+    handleChangePassword(
+      message.oldPassword,
+      message.newPassword,
+      sendResponse,
+    );
+    return true;
   }
 
   (async () => {
@@ -276,7 +282,6 @@ async function handleContentScriptReady(sender) {
       `New tab opened during lockdown (ID: ${sender.tab.id}). Injecting overlay with context: ${context}.`,
     );
     try {
-      // Send the context along with the action
       await chrome.tabs.sendMessage(sender.tab.id, {
         action: "SHOW_OVERLAY",
         context: context,
@@ -291,8 +296,6 @@ async function handleContentScriptReady(sender) {
 
 function handleHeartbeat() {
   checkAndSetStartTimestamp(performance.now());
-
-  // Increment the heartbeat count for the current session.
   if (!sessionData.heartbeatCount) {
     sessionData.heartbeatCount = 0;
   }
@@ -548,7 +551,7 @@ async function handleProfileReset() {
     // Update the popup to the normal UI (it will show profiling progress).
     await updateActionPopup();
 
-    // 5. DO NOT open onboarding.html. Instead, broadcast the lockdown command
+    // DO NOT open onboarding.html. Instead, broadcast the lockdown command
     // to all open tabs, forcing the user to re-authenticate to begin profiling.
     await broadcastToTabs({
       action: "SHOW_OVERLAY",
@@ -566,5 +569,36 @@ async function handleProfileReset() {
     });
   }
 }
+
+// Handler for the Change Password Logic
+async function handleChangePassword(oldPassword, newPassword, sendResponse) {
+  const uuid = await getProfileUUID();
+  if (!uuid) {
+    sendResponse({ success: false, error: "Profile ID not found." });
+    return;
+  }
+
+  try {
+    const response = await fetch(ENDPOINTS.CHANGE_PASSWORD(uuid), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        old_password: oldPassword,
+        new_password: newPassword,
+      }),
+    });
+
+    if (response.ok) {
+      sendResponse({ success: true });
+    } else {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || "Failed to change password.");
+    }
+  } catch (error) {
+    console.error("Change password error:", error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
 // Initial check when the service worker starts
 updateActionPopup();
