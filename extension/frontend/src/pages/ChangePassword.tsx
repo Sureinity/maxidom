@@ -151,6 +151,7 @@ const ChangePassword = ({ onNavigate }: ChangePasswordProps) => {
               </div>
             </div>
           )}
+          
         </fieldset>
       </div>
     </>
