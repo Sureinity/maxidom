@@ -1,8 +1,11 @@
 import { IoSettingsSharp } from "react-icons/io5";
-import { TbLogs } from "react-icons/tb";
 import logo from "../assets/MaxiDOM-logo.png";
 
-const Navbar = () => {
+interface NavbarProps {
+  onNavigate?: (page: string) => void;
+}
+
+const Navbar = ({ onNavigate }: NavbarProps) => {
   return (
     <>
         <div className="flex justify-between items-center p-4">
@@ -11,22 +14,13 @@ const Navbar = () => {
           </div>
 
           <div className="flex gap-2">
-            <div className="tooltip tooltip-bottom" data-tip="Settings">
-            <button className="btn btn-neutral btn-sm p-2">
+            <div className="tooltip tooltip-left" data-tip="Settings">
+            <button className="btn btn-neutral btn-sm p-2" onClick={() => onNavigate && onNavigate("manageProfile")}>
               <IoSettingsSharp
                 size={16}
               />
             </button>
           </div>
-
-          <div className="tooltip tooltip-bottom" data-tip="Logs">
-            <button className="btn btn-neutral btn-sm p-2">
-              <TbLogs
-                size={16}
-              />
-            </button>
-          </div>
-
           </div>
         </div>
     </>
