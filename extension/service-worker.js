@@ -4,6 +4,7 @@ import {
   getSystemState,
   setSystemState,
   setProfilingProgress,
+  clearProfilingProgress,
 } from "./utils/helpers.js";
 
 // Hybrid Model Constants
@@ -12,7 +13,7 @@ const INACTIVITY_TIMEOUT_MS = 5000; // Primary trigger: End session after 5s of 
 const MAX_SESSION_DURATION_MS = 90000; // Safety Net 1: Force end session after 90s.
 const MAX_EVENT_COUNT = 2000; // Safety Net 2: Force end session after 2000 events.
 const MINIMUM_EVENTS_THRESHOLD = 20; // Noise Reduction: Discard sessions with too few meaningful events.
-const PASSIVE_SESSION_HEARTBEAT_THRESHOLD = 10; // New threshold to identify passive (scrolling) sessions.
+const PASSIVE_SESSION_HEARTBEAT_THRESHOLD = 10; // Threshold to identify passive (scrolling) sessions.
 
 // Global State
 let sessionData = {};
@@ -26,6 +27,9 @@ let isFinalizing = false;
 // New state variable to manage the profiling lockdown.
 let isProfilingUnlocked = false;
 
+// State to track if overlay should be shown
+let overlayState = { showOverlay: false, context: null };
+
 // Core Session Management Functions
 function resetSessionData() {
   clearTimeout(inactivityTimeout);
@@ -37,7 +41,7 @@ function resetSessionData() {
     keyEvents: [],
     mousePaths: [],
     clicks: [],
-    heartbeatCount: 0, // Reset heartbeat count for the new session.
+    heartbeatCount: 0,
   };
 
   keyDownMap.clear();
@@ -60,6 +64,8 @@ async function finalizeAndSendSession() {
   if (isFinalizing || !sessionData.startTimestamp) {
     return;
   }
+  clearTimeout(inactivityTimeout);
+  inactivityTimeout = null;
 
   // Upon finalization, any pending timers must be cleared to prevent potential issues caused by stale timers.
   clearTimeout(inactivityTimeout);
@@ -76,7 +82,7 @@ async function finalizeAndSendSession() {
     delete sessionData.currentMousePath;
   }
 
-  // New, more sophisticated session validation logic.
+  // Sophisticated session validation logic.
   const totalMeaningfulEvents =
     sessionData.keyEvents.length +
     sessionData.clicks.length +
@@ -149,8 +155,12 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
 // Listener for when the browser starts up. This is our primary LOCK trigger.
 chrome.runtime.onStartup.addListener(async () => {
-  isProfilingUnlocked = false; // Always start locked if in profiling mode.
+  isProfilingUnlocked = false;
   console.log("Browser startup: Profiling session is locked by default.");
+  const state = await getSystemState();
+  if (state === "profiling") {
+    await broadcastToTabs({ action: "SHOW_OVERLAY", context: "profiling_lock" });
+  }
   await updateActionPopup();
 });
 
@@ -161,11 +171,12 @@ chrome.windows.onCreated.addListener(async (window) => {
     const tabs = await chrome.tabs.query({ active: true, windowId: window.id });
     if (tabs[0]) {
       setTimeout(() => {
-        // Send the correct context for the profiling lock
         chrome.tabs.sendMessage(tabs[0].id, {
           action: "SHOW_OVERLAY",
           context: "profiling_lock",
         });
+        // Update overlay state
+        overlayState = { showOverlay: true, context: "profiling_lock" };
       }, 500);
     }
   }
@@ -174,29 +185,105 @@ chrome.windows.onCreated.addListener(async (window) => {
 // Central Message Listener: The router for all incoming data from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "ENROLL_PASSWORD") {
-    handleEnrollment(message.password, sendResponse);
+    handleEnrollment(message.password.trim(), sendResponse);
     return true;
   }
   if (message.type === "REQUEST_PROFILING_STATUS") {
     handleProfilingStatusRequest(sendResponse);
     return true;
   }
+  if (message.type === "RESET_PROFILE") {
+    handleProfileReset();
+    return; // This is a fire-and-forget message
+  }
+  if (message.type === "VERIFY_PASSWORD_FOR_RESET") {
+    (async () => {
+      const uuid = await getProfileUUID();
+      if (!uuid) {
+        sendResponse({ verified: false });
+        return;
+      }
+      try {
+        const response = await fetch(ENDPOINTS.VERIFY_PASSWORD(uuid), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: message.password.trim() }),
+        });
+        if (!response.ok) throw new Error("Verification request failed.");
+        const result = await response.json();
+        sendResponse(result); // Sends back {"verified": true/false}
+      } catch (error) {
+        console.error("Verification for reset error:", error);
+        sendResponse({ verified: false });
+      }
+    })();
+    return true; // Keep the message channel open for the async response.
+  }
+  if (message.type === "CHANGE_PASSWORD") {
+    (async () => {
+      const uuid = await getProfileUUID();
+      if (!uuid) {
+        sendResponse({ success: false, error: "Profile ID not found." });
+        return;
+      }
+      try {
+        const response = await fetch(ENDPOINTS.CHANGE_PASSWORD(uuid), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ old_password: message.oldPassword.trim(), new_password: message.newPassword.trim() }),
+        });
+        if (!response.ok) {
+          let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            try {
+              const errorData = await response.json();
+              errorMessage = errorData.detail || errorMessage;
+            } catch (jsonError) {
+              // If JSON parsing fails, keep the default error message
+            }
+          } else {
+            // If not JSON, try to get text response
+            try {
+              const text = await response.text();
+              if (text.startsWith('<!DOCTYPE')) {
+                errorMessage = `Server error: ${response.status} ${response.statusText}`;
+              } else {
+                errorMessage = text;
+              }
+            } catch (textError) {
+              // Keep the default error message
+            }
+          }
+          throw new Error(errorMessage);
+        }
+        const result = await response.json();
+        sendResponse({ success: true });
+      } catch (error) {
+        console.error("Change password error:", error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    return true; // Keep the message channel open for the async response.
+  }
+  if (message.type === "GET_OVERLAY_STATE") {
+    sendResponse(overlayState);
+    return true;
+  }
 
   (async () => {
     const currentState = await getSystemState();
 
-    if (currentState === "profiling" && !isProfilingUnlocked) {
+    if (
+      (currentState === "profiling" && !isProfilingUnlocked) ||
+      currentState === "awaiting_verification"
+    ) {
       if (message.type === "PASSWORD_SUBMITTED") {
-        handlePasswordVerification(message.password, "profiling_unlock");
-      } else if (message.type === "CONTENT_SCRIPT_READY") {
-        await handleContentScriptReady(sender);
-      }
-      return;
-    }
-
-    if (currentState === "awaiting_verification") {
-      if (message.type === "PASSWORD_SUBMITTED") {
-        handlePasswordVerification(message.password, "anomaly_response");
+        const context =
+          currentState === "profiling"
+            ? "profiling_unlock"
+            : "anomaly_response";
+        handlePasswordVerification(message.password, context);
       } else if (message.type === "CONTENT_SCRIPT_READY") {
         await handleContentScriptReady(sender);
       }
@@ -211,6 +298,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       handleRawEvent(message.payload);
     } else if (message.type === "HEARTBEAT") {
       handleHeartbeat();
+    } else if (message.type === "BLUR_EVENT") {
+      if (keyDownMap.size > 0) {
+        console.log(
+          "Window blurred. Clearing dangling keydown events to prevent corruption.",
+        );
+        keyDownMap.clear();
+      }
     }
   })();
 
@@ -231,19 +325,23 @@ async function broadcastToTabs(message) {
       }
     }
   }
+  // Update overlay state if showing or hiding overlay
+  if (message.action === "SHOW_OVERLAY") {
+    overlayState = { showOverlay: true, context: message.context };
+  } else if (message.action === "HIDE_OVERLAY") {
+    overlayState = { showOverlay: false, context: null };
+  }
 }
 
 // This function now sends the correct context based on the global state.
 async function handleContentScriptReady(sender) {
   const currentState = await getSystemState();
   let context = null;
-
   if (currentState === "awaiting_verification") {
     context = "anomaly";
   } else if (currentState === "profiling" && !isProfilingUnlocked) {
     context = "profiling_lock";
   }
-
   if (context) {
     console.log(
       `New tab opened during lockdown (ID: ${sender.tab.id}). Injecting overlay with context: ${context}.`,
@@ -254,6 +352,8 @@ async function handleContentScriptReady(sender) {
         action: "SHOW_OVERLAY",
         context: context,
       });
+      // Update overlay state
+      overlayState = { showOverlay: true, context: context };
     } catch (error) {
       console.warn(
         `Failed to send initial overlay command to tab ${sender.tab.id}: ${error.message}`,
@@ -292,16 +392,13 @@ async function handleProfilingStatusRequest(sendResponse) {
 // Main Event Aggregation Logic
 function handleRawEvent(event) {
   checkAndSetStartTimestamp(event.t);
-
   clearTimeout(inactivityTimeout);
   inactivityTimeout = setTimeout(finalizeAndSendSession, INACTIVITY_TIMEOUT_MS);
-
   const sessionDuration = event.t - (sessionData.startTimestamp || event.t);
   const roughEventCount =
     (sessionData.keyEvents?.length || 0) +
     (sessionData.clicks?.length || 0) +
     (sessionData.mousePaths?.length || 0);
-
   if (
     sessionDuration > MAX_SESSION_DURATION_MS ||
     roughEventCount > MAX_EVENT_COUNT
@@ -312,7 +409,6 @@ function handleRawEvent(event) {
     finalizeAndSendSession();
     return;
   }
-
   switch (event.eventType) {
     case "mousemove":
       if (!sessionData.currentMousePath) sessionData.currentMousePath = [];
@@ -365,10 +461,8 @@ function handleRawEvent(event) {
 async function handleDataPayload(payload) {
   const uuid = await getProfileUUID();
   if (!uuid) throw new Error("Profile UUID not found.");
-
   const { userId, ...payloadToSend } = payload;
   const state = await getSystemState();
-
   if (state === "profiling") {
     await handleProfiling(ENDPOINTS.TRAIN(uuid), payloadToSend);
   } else if (state === "detection") {
@@ -385,11 +479,9 @@ async function handleProfiling(endpoint, payload) {
       body: JSON.stringify(payload),
     });
     if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-
     const data = await response.json();
     await setProfilingProgress(data.progress);
     console.log("Profiling progress updated:", data.progress);
-
     if (data.progress.is_ready) {
       console.log(
         "Profile readiness conditions met. Transitioning to DETECTION state.",
@@ -409,7 +501,6 @@ async function handleDetection(endpoint, payload, uuid) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-
     if (response.status === 404) {
       console.warn("Model not found (404). Resetting to PROFILING state.");
       await setSystemState("profiling");
@@ -417,15 +508,11 @@ async function handleDetection(endpoint, payload, uuid) {
       return;
     }
     if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-
     const data = await response.json();
     if (data.is_anomaly) {
       console.warn("⚠️ ANOMALY DETECTED! Initiating lockdown.", data);
-
       clearTimeout(inactivityTimeout);
-
       await setSystemState("awaiting_verification");
-      // Send the 'anomaly' context when an anomaly is detected.
       await broadcastToTabs({ action: "SHOW_OVERLAY", context: "anomaly" });
     } else {
       console.log("Normal behavior detected.", data);
@@ -450,11 +537,33 @@ async function handleEnrollment(password, sendResponse) {
     });
     if (response.ok) {
       await setSystemState("profiling");
+      isProfilingUnlocked = true;
       await updateActionPopup();
       sendResponse({ success: true });
     } else {
-      const errorData = await response.json();
-      throw new Error(errorData.detail || "Enrollment failed.");
+      let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.detail || errorMessage;
+        } catch (jsonError) {
+          // If JSON parsing fails, keep the default error message
+        }
+      } else {
+        // If not JSON, try to get text response
+        try {
+          const text = await response.text();
+          if (text.startsWith('<!DOCTYPE')) {
+            errorMessage = `Server error: ${response.status} ${response.statusText}`;
+          } else {
+            errorMessage = text;
+          }
+        } catch (textError) {
+          // Keep the default error message
+        }
+      }
+      throw new Error(errorMessage);
     }
   } catch (error) {
     console.error("Enrollment error:", error);
@@ -465,15 +574,13 @@ async function handleEnrollment(password, sendResponse) {
 async function handlePasswordVerification(password, context) {
   const uuid = await getProfileUUID();
   if (!uuid) return;
-
   try {
     const response = await fetch(ENDPOINTS.VERIFY_PASSWORD(uuid), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: password }),
+      body: JSON.stringify({ password: password.trim() }),
     });
     if (!response.ok) throw new Error("Verification request failed.");
-
     const result = await response.json();
     if (result.verified) {
       console.log("Password verification successful.");
@@ -481,7 +588,6 @@ async function handlePasswordVerification(password, context) {
         isProfilingUnlocked = true;
         console.log("Profiling unlocked for this browser session.");
       } else {
-        // anomaly_response
         await setSystemState("detection");
         console.log("Resuming normal operation.");
       }
@@ -502,5 +608,59 @@ async function handlePasswordVerification(password, context) {
   }
 }
 
+// Handler for the Profile Reset Logic
+async function handleProfileReset() {
+  const uuid = await getProfileUUID();
+  if (!uuid) {
+    console.error("Cannot reset profile: No UUID found.");
+    return;
+  }
+
+  console.log(`Initiating profile reset for ${uuid}...`);
+
+  try {
+    // Call the backend to delete all biometric data (models, csv files, etc.)
+    const response = await fetch(ENDPOINTS.RESET_PROFILE(uuid), {
+      method: "DELETE",
+    });
+
+    if (!response.ok && response.status !== 404) {
+      throw new Error(`Backend reset failed with status: ${response.status}`);
+    }
+
+    console.log(
+      "Backend data successfully deleted. Resetting local extension state.",
+    );
+
+    // Set the state to 'profiling'.
+    await setSystemState("profiling");
+
+    // Clear any old profiling progress data.
+    await clearProfilingProgress();
+
+    // Ensure the lockdown is active for the new profiling session.
+    isProfilingUnlocked = false;
+
+    // Update the popup to the normal UI (it will show profiling progress).
+    await updateActionPopup();
+
+    // 5. DO NOT open onboarding.html. Instead, broadcast the lockdown command
+    // to all open tabs, forcing the user to re-authenticate to begin profiling.
+    await broadcastToTabs({
+      action: "SHOW_OVERLAY",
+      context: "profiling_lock",
+    });
+  } catch (error) {
+    console.error("An error occurred during profile reset:", error);
+    // Notify the user that the reset failed.
+    chrome.notifications.create({
+      type: "basic",
+      iconUrl: "icons/icon128.png",
+      title: "MaxiDOM Error",
+      message:
+        "Failed to reset your profile. Please check the console for details.",
+    });
+  }
+}
 // Initial check when the service worker starts
 updateActionPopup();
