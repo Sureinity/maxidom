@@ -2,6 +2,10 @@ import { useState, useEffect } from "react";
 import Navbar from "../components/Navbar";
 import styles from "../css/PopupPage.module.css";
 
+interface PopupPageProps {
+  onNavigate: (page: string) => void;
+}
+
 type SystemState = "enrollment" | "profiling" | "detection" | "awaiting_verification";
 
 interface Status {
@@ -27,7 +31,7 @@ interface Status {
   };
 }
 
-const PopupPage = () => {
+const PopupPage = ({ onNavigate }: PopupPageProps) => {
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -89,7 +93,7 @@ const PopupPage = () => {
 
   return (
     <div id={styles.container}>
-      <Navbar />
+      <Navbar onNavigate={onNavigate} />
       <div className="p-4">{renderStatus()}</div>
 
       <div className="card bg-base-300 shadow-xl rounded-none absolute bottom-0">
