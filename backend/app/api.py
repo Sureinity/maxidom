@@ -199,16 +199,8 @@ def score_user_data(profile_id: str, payload: Payload, background_tasks: Backgro
         payload_dict = payload.dict()
         feature_vector = feature_extractor.extract_features(payload_dict)
         result = model_manager.score(profile_id, feature_vector)
-        
-        if not result["is_anomaly"]:
-            pool_size = model_manager.save_features(profile_id, feature_vector, is_retraining_sample=True)
-            model_manager.save_raw_payload(profile_id, payload_dict, is_retraining_sample=True)
-            logger.info(f"Normal sample saved for {profile_id}. Retraining pool size: {pool_size}")
-            
-            if pool_size >= model_manager.retraining_threshold:
-                logger.info(f"Retraining threshold met for {profile_id}. Scheduling retraining.")
-                background_tasks.add_task(model_manager.retrain_model, profile_id)
-        else:
+
+        if result["is_anomaly"]:
             logger.warning(f"Anomaly detected for user {profile_id} -> "
                            f"score={result['score']:.4f}, "
                            f"threshold={result['threshold']:.4f}, "
@@ -217,7 +209,7 @@ def score_user_data(profile_id: str, payload: Payload, background_tasks: Backgro
         return result
     except ValueError as e:
         logger.warning(f"Scoring failed for {profile_id}: {e}")
-        raise HTTPException(status_code=404, detail="Model not found.")
+        raise HTTPException(status_code=404, detail="Model not found. The system is likely still in the profiling phase.")
     except Exception as e:
         logger.error(f"Error in /score for {profile_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal error during scoring.")

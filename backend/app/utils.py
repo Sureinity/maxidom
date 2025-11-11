@@ -57,11 +57,7 @@ class UserModelManager:
         self.min_samples_for_training = 300
         self.min_keyboard_samples = 50 
         self.min_mouse_samples = 150 
-        
-        # Retraining thresholds and strategy parameters
-        self.retraining_threshold = 500
-        self.retraining_sample_size = 300 # How many samples to draw from the new data.
-        self.foundation_sample_size = 300 # How many samples to draw from the original data.
+        # Retraining parameters are removed as the model is now static.
  
     def _get_user_dir(self, profile_id) -> Path:
         """Get the directory path for a specific user, creating it if necessary."""
@@ -69,25 +65,25 @@ class UserModelManager:
         user_dir.mkdir(exist_ok=True, parents=True)
         return user_dir
     
-    def save_raw_payload(self, profile_id: str, payload_dict: dict, is_retraining_sample: bool = False):
+    def save_raw_payload(self, profile_id: str, payload_dict: dict):
         """Saves the raw JSON payload to a .jsonl file for archival."""
         user_dir = self._get_user_dir(profile_id)
         raw_data_dir = user_dir / "raw_data"
         raw_data_dir.mkdir(exist_ok=True)
         
-        target_file = raw_data_dir / "retraining_raw.jsonl" if is_retraining_sample else raw_data_dir / "profiling_raw.jsonl"
+        target_file = raw_data_dir / "profiling_raw.jsonl"
         
         try:
             with open(target_file, 'a') as f:
-                f.write(json.dumps(payload_dict) + '\n')
+                f.write(json.dumps(payload_dict) + '\\n')
         except Exception as e:
             logger.error(f"Failed to save raw payload for {profile_id}: {e}")
 
-    def save_features(self, profile_id: str, feature_vector: np.ndarray, is_retraining_sample: bool = False) -> int:
-        """Saves a feature vector to the appropriate CSV file."""
+    def save_features(self, profile_id: str, feature_vector: np.ndarray) -> int:
+        """Saves a feature vector to the foundational features.csv file."""
         user_dir = self._get_user_dir(profile_id)
         
-        features_file = user_dir / "retraining_pool.csv" if is_retraining_sample else user_dir / "features.csv"
+        features_file = user_dir / "features.csv"
 
         file_exists = features_file.exists()
         with open(features_file, mode='a', newline='') as file:
