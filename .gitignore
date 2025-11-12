@@ -1,36 +1,11 @@
-# Python (Backend)
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-.nox/
-.hypothesis/
+# uv package manager and environments
+.uv/
 .venv/
 venv/
-.uv/
-*.log
+env/
+uv.lock
 
-# SSL Certificates
+# SSL Certificates / Private Keys (never commit)
 *.pem
 *.key
 *.crt
@@ -69,5 +44,33 @@ dist-ssr/
 *.sln
 *.sw?
 
-# Miscellaneous
+# Python (Backend)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# Project data (local, non-source artifacts)
 user_data/
+*.db
