@@ -7,6 +7,7 @@ from pathlib import Path
 import joblib
 import logging
 import json
+import shutil
 from typing import Dict, List, Any
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,6 @@ class UserModelManager:
         self.user_data_dir = user_data_dir
         self.all_feature_names = feature_names
         
-        # Define which features belong to which specialist model based on the new set
         self.mouse_features = [
             "avg_mouse_speed", "std_mouse_speed", "avg_mouse_acceleration",
             "std_mouse_acceleration", "path_straightness", "avg_click_duration",
@@ -56,9 +56,12 @@ class UserModelManager:
         # Diversity thresholds for the entire dataset before training begins
         self.min_samples_for_training = 300
         self.min_keyboard_samples = 50 
-        self.min_mouse_samples = 150
-        self.min_digraph_samples = 30
+        self.min_mouse_samples = 150 
+        
+        # Retraining thresholds and strategy parameters
         self.retraining_threshold = 500
+        self.retraining_sample_size = 300 # How many samples to draw from the new data.
+        self.foundation_sample_size = 300 # How many samples to draw from the original data.
  
     def _get_user_dir(self, profile_id) -> Path:
         """Get the directory path for a specific user, creating it if necessary."""
@@ -110,6 +113,7 @@ class UserModelManager:
                 "total_samples": {"current": 0, "required": self.min_samples_for_training},
                 "keyboard_samples": {"current": 0, "required": self.min_keyboard_samples},
                 "mouse_samples": {"current": 0, "required": self.min_mouse_samples},
+                "digraph_samples": {"current": 0, "required": 30}, # Assuming a default, can be added to __init__
                 "is_ready": False
             }
 
@@ -128,14 +132,14 @@ class UserModelManager:
             total >= self.min_samples_for_training and
             keyboard >= self.min_keyboard_samples and
             mouse >= self.min_mouse_samples and
-            digraphs >= self.min_digraph_samples
+            digraphs >= 30 # Assuming a default
         )
 
         return {
             "total_samples": {"current": total, "required": self.min_samples_for_training},
             "keyboard_samples": {"current": keyboard, "required": self.min_keyboard_samples},
             "mouse_samples": {"current": mouse, "required": self.min_mouse_samples},
-            "digraph_samples": {"current": digraphs, "required": self.min_digraph_samples},
+            "digraph_samples": {"current": digraphs, "required": 30},
             "is_ready": is_ready
         }
 
@@ -168,7 +172,7 @@ class UserModelManager:
     def _train_and_save_specialist(self, df: pd.DataFrame, feature_subset: List[str], model_type: str, profile_id: str):
         """Helper function to train, calibrate, and save a single specialist model package."""
         if len(df) < 20: 
-            logger.warning(f"Skipping {model_type} model for {profile_id}: only {len(df)} samples, which is below the minimum of 20.")
+            logger.warning(f"Skipping {model_type} model for {profile_id}: only {len(df)} samples.")
             return
 
         user_dir = self._get_user_dir(profile_id)
@@ -234,20 +238,36 @@ class UserModelManager:
         
         return {"is_anomaly": bool(is_anomaly), "score": float(score), "model_used": model_type, "threshold": float(dynamic_threshold)}
 
-    def retrain_model(self, profile_id):
-        """Retrains all specialist models using data from the original and retraining pools."""
+    def retrain_model(self, profile_id: str):
+        """
+        Retrains specialist models using a balanced, weighted sample of
+        foundational and recent behavioral data to prevent model drift.
+        """
         user_dir = self._get_user_dir(profile_id)
         features_file = user_dir / "features.csv"
         retraining_file = user_dir / "retraining_pool.csv"
         
         if not features_file.is_file() or not retraining_file.is_file():
+            logger.warning(f"Retraining aborted for {profile_id}: Missing foundational or retraining data.")
             return False
 
         try:
             original_df = pd.read_csv(features_file)
             retraining_df = pd.read_csv(retraining_file)
-            combined_df = pd.concat([original_df, retraining_df], ignore_index=True)
             
+            logger.info(f"Starting weighted sampling for retraining user {profile_id}.")
+
+            # Handle cases where we don't have enough data to meet the sample size
+            n_foundation = min(self.foundation_sample_size, len(original_df))
+            n_retraining = min(self.retraining_sample_size, len(retraining_df))
+            
+            foundation_sample = original_df.sample(n=n_foundation, replace=False, random_state=42)
+            retraining_sample = retraining_df.sample(n=n_retraining, replace=False, random_state=42)
+            
+            combined_df = pd.concat([foundation_sample, retraining_sample], ignore_index=True)
+            logger.info(f"Created balanced training set of {len(combined_df)} samples ({n_foundation} foundational, {n_retraining} recent).")
+            
+            # Re-run the same segmentation and training logic as the initial training
             is_mouse_active = combined_df["avg_mouse_speed"] > 0
             is_typing_active = combined_df["typing_speed_kps"] > 0
             
@@ -261,9 +281,35 @@ class UserModelManager:
             self._train_and_save_specialist(df_typing_only, self.typing_features, "typing", profile_id)
             self._train_and_save_specialist(df_mixed, self.all_feature_names, "mixed", profile_id)
             
+            # Clear retraining pool after successful retraining
             retraining_file.write_text(f"timestamp,{','.join(self.all_feature_names)}\n")
             logger.info(f"Retraining pool cleared for user {profile_id}")
+            
             return True
         except Exception as e:
             logger.error(f"Error retraining model for user {profile_id}: {e}", exc_info=True)
+            return False
+        
+    def delete_user_data(self, profile_id: str) -> bool:
+        """
+        Permanently deletes all data associated with a profile ID, including
+        models, feature pools, and raw data archives.
+        
+        Args:
+            profile_id: The user's unique identifier.
+            
+        Returns:
+            True if deletion was successful or directory didn't exist, False on error.
+        """
+        user_dir = self._get_user_dir(profile_id)
+        if not user_dir.exists():
+            logger.info(f"No data directory to delete for profile: {profile_id}")
+            return True
+        
+        try:
+            shutil.rmtree(user_dir)
+            logger.info(f"Successfully deleted all data for profile: {profile_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete data directory for profile {profile_id}: {e}", exc_info=True)
             return False
