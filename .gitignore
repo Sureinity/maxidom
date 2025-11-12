@@ -1,11 +1,9 @@
-# uv package manager and environments
+# uv package manager
 .uv/
 .venv/
-venv/
-env/
 uv.lock
 
-# SSL Certificates / Private Keys (never commit)
+# SSL Certificate
 *.pem
 *.key
 *.crt
@@ -44,12 +42,18 @@ dist-ssr/
 *.sln
 *.sw?
 
+# Miscellaneous
+user_data/
+user_data/
+*.db
+=======
 # Python (Backend)
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+env/
 build/
 develop-eggs/
 dist/
@@ -70,7 +74,103 @@ htmlcov/
 .tox/
 .nox/
 .hypothesis/
+.venv/
+venv/
+.uv/
+*.log
 
-# Project data (local, non-source artifacts)
+# uv package manager
+.uv/
+.venv/
+uv.lock
+
+# SSL Certificate
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.priv
+*.p12
+*.pfx
+*.p7b
+*.p7c
+
+# Node / Frontend
+node_modules/
+*.crx
+*.zip
+
+# Frontend Logs and Builds
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+dist/
+dist-ssr/
+*.local
+
+# Editor & System Files
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Miscellaneous
+user_data/
+*.db
+
+# uv package manager
+.uv/
+.venv/
+uv.lock
+
+# SSL Certificate
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.priv
+*.p12
+*.pfx
+*.p7b
+*.p7c
+
+# Node / Frontend
+node_modules/
+*.crx
+*.zip
+
+# Frontend Logs and Builds
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+dist/
+dist-ssr/
+*.local
+
+# Editor & System Files
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Miscellaneous
 user_data/
 *.db
