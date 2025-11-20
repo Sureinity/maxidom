@@ -66,7 +66,33 @@ async function finalizeAndSendSession() {
 
   // Set the lock to prevent new events from being processed.
   isFinalizing = true;
-  sessionData.endTimestamp = performance.now();
+
+  // --- FIX: Causality Check ---
+  // Instead of blindly trusting performance.now() which may drift or reset
+  // in SW lifecycles, find the latest timestamp from actual data.
+  let lastEventTime = sessionData.startTimestamp;
+
+  // Check Key Events
+  if (sessionData.keyEvents.length > 0) {
+    const lastKey = sessionData.keyEvents[sessionData.keyEvents.length - 1];
+    if (lastKey.upTime > lastEventTime) lastEventTime = lastKey.upTime;
+  }
+  // Check Mouse Paths
+  if (sessionData.mousePaths.length > 0) {
+    const lastPath = sessionData.mousePaths[sessionData.mousePaths.length - 1];
+    if (lastPath.length > 0) {
+      const lastPoint = lastPath[lastPath.length - 1];
+      if (lastPoint.t > lastEventTime) lastEventTime = lastPoint.t;
+    }
+  }
+  // Check Clicks
+  if (sessionData.clicks.length > 0) {
+    const lastClick = sessionData.clicks[sessionData.clicks.length - 1];
+    if (lastClick.t > lastEventTime) lastEventTime = lastClick.t;
+  }
+
+  // Ensure End is at least Start, preferring the later of performance.now() or last event.
+  sessionData.endTimestamp = Math.max(lastEventTime, performance.now());
 
   // Finalize any pending mouse path before sending.
   if (sessionData.currentMousePath && sessionData.currentMousePath.length > 0) {
