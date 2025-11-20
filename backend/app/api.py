@@ -191,49 +191,55 @@ def train_user_data(profile_id: str, payload: Payload, background_tasks: Backgro
 
 
 @app.post("/api/score/{profile_id}")
-def score_user_data(profile_id: str, payload: Payload, background_tasks: BackgroundTasks):
+def score_user_data(profile_id: str, payload: Payload):
     """
-    Receives behavioral data during the detection phase.
+    Receives behavioral data, dissects it, and scores it with specialist models.
     """
     try:
         payload_dict = payload.dict()
         feature_vector = feature_extractor.extract_features(payload_dict)
+        
+        # The manager's score method now contains the "Dissect and Score" logic
         result = model_manager.score(profile_id, feature_vector)
-
+        
         if result["is_anomaly"]:
+            # Updated logging to be more informative for the new scoring method
             logger.warning(f"Anomaly detected for user {profile_id} -> "
-                           f"score={result['score']:.4f}, "
-                           f"threshold={result['threshold']:.4f}, "
-                           f"model='{result['model_used']}'")
+                           f"final_score={result['score']:.4f} "
+                           f"(mouse: {result['mouse_score']:.4f}, typing: {result['typing_score']:.4f})")
         
         return result
+        
     except ValueError as e:
         logger.warning(f"Scoring failed for {profile_id}: {e}")
-        raise HTTPException(status_code=404, detail="Model not found. The system is likely still in the profiling phase.")
+        raise HTTPException(status_code=404, detail="Model not found.")
     except Exception as e:
-        logger.error(f"Error in /score for {profile_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal error during scoring.")
-
+        logger.error(f"Error in /score endpoint for {profile_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred during scoring.")
 
 @app.post("/api/test_score_row/{profile_id}")
 def test_score_row(profile_id: str, feature_row: dict):
     """
     A temporary testing endpoint.
     """
-    logger.info(f"Received test score request for profile {profile_id}")
     try:
         feature_vector = np.array([feature_row[name] for name in FEATURE_NAMES])
     except KeyError as e:
         raise HTTPException(status_code=422, detail=f"Missing feature in test data: {e}")
+
     try:
         result = model_manager.score(profile_id, feature_vector)
         log_prefix = "🚨 TEST ANOMALY:" if result['is_anomaly'] else "✅ TEST NORMAL:"
-        logger.info(f"{log_prefix} score={result['score']:.4f}, threshold={result['threshold']:.4f}, model='{result['model_used']}'")
+        
+        # Updated logging for the new score result format
+        logger.info(f"{log_prefix} final_score={result['score']:.4f} "
+                    f"(mouse: {result['mouse_score']:.4f}, typing: {result['typing_score']:.4f})")
+        
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=f"Model not found for user {profile_id}.")
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Internal error during test scoring.")
+        raise HTTPException(status_code=500, detail="An internal error during test scoring.")
 
 
 # Serving Extension auto-update files
