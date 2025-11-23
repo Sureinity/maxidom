@@ -37,7 +37,7 @@ function showVerificationOverlay(context) {
   }
 
   document.documentElement.setAttribute("data-theme", "dark");
-  
+
   const style = document.createElement("style");
   style.textContent = `
     #${MAXIDOM_OVERLAY_ID}, 
@@ -209,7 +209,10 @@ function showVerificationOverlay(context) {
     event.stopPropagation();
     event.stopImmediatePropagation();
   };
-  window.addEventListener("wheel", wheelListener, { capture: true, passive: false });
+  window.addEventListener("wheel", wheelListener, {
+    capture: true,
+    passive: false,
+  });
 }
 
 /** Removes the overlay and re-enables interactions. */
@@ -269,7 +272,7 @@ document.addEventListener(
       },
     });
   },
-  true
+  true,
 );
 
 document.addEventListener(
@@ -281,7 +284,7 @@ document.addEventListener(
       payload: { eventType: "keydown", t: performance.now(), code: event.code },
     });
   },
-  true
+  true,
 );
 
 document.addEventListener(
@@ -292,7 +295,7 @@ document.addEventListener(
       payload: { eventType: "keyup", t: performance.now(), code: event.code },
     });
   },
-  true
+  true,
 );
 
 document.addEventListener(
@@ -309,7 +312,7 @@ document.addEventListener(
       },
     });
   },
-  true
+  true,
 );
 
 document.addEventListener(
@@ -326,7 +329,7 @@ document.addEventListener(
       },
     });
   },
-  true
+  true,
 );
 
 // Blur and heartbeat tracking
@@ -342,5 +345,5 @@ document.addEventListener(
   () => {
     chrome.runtime.sendMessage({ type: "HEARTBEAT" });
   },
-  { passive: true, capture: true }
+  { passive: true, capture: true },
 );

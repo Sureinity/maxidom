@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="MaxiDOM Behavioral Biometrics API",
     description="API for training and scoring user behavioral profiles.",
-    version="2.3.1-static"
+    version="2.4.0-changepw"
 )
 
 # Call the database initializer on application startup
@@ -63,17 +63,17 @@ def enroll_user(profile_id: str, data: dict = Body(...)):
     Enrolls a new user by hashing and storing their password.
     This endpoint is decoupled from the client's state machine.
     """
-    password = data.get("password", "").strip()
+    password = data.get("password")
     if not password:
         raise HTTPException(status_code=422, detail="Password not provided.")
-
+    
     password_hash = get_password_hash(password)
     success = save_user_hash(profile_id, password_hash)
-
+    
     if not success:
         logger.warning(f"Enrollment attempt for existing profile: {profile_id}")
         raise HTTPException(status_code=409, detail="Profile already enrolled.")
-
+        
     logger.info(f"Successfully enrolled new profile: {profile_id}")
     # The backend's only job is to confirm success. The client is responsible
     # for changing its own state from 'enrollment' to 'profiling'.
@@ -85,49 +85,55 @@ def verify_user_password(profile_id: str, data: dict = Body(...)):
     """
     Verifies a password attempt against the stored hash for a given user.
     """
-    password_attempt = data.get("password", "").strip()
+    password_attempt = data.get("password")
     if not password_attempt:
         raise HTTPException(status_code=422, detail="Password not provided.")
 
     stored_hash = get_user_hash(profile_id)
     if not stored_hash:
         raise HTTPException(status_code=404, detail="User profile not found or not enrolled.")
-
+    
     is_verified = verify_password(password_attempt, stored_hash)
-
+    
     if is_verified:
         logger.info(f"Password verification successful for profile: {profile_id}")
     else:
         logger.warning(f"Password verification FAILED for profile: {profile_id}")
-
+        
     return {"verified": is_verified}
 
 
-@app.put("/api/change_password/{profile_id}")
-def change_user_password(profile_id: str, data: dict = Body(...)):
+@app.put("/api/profile/{profile_id}/password")
+def change_password(profile_id: str, data: dict = Body(...)):
     """
-    Changes the password for an existing user after verifying the old password.
+    Allows an authenticated user to change their password.
+    Requires the user's current password for authorization.
     """
-    old_password = data.get("old_password", "").strip()
-    new_password = data.get("new_password", "").strip()
-    if not old_password or not new_password:
-        raise HTTPException(status_code=422, detail="Both old and new passwords must be provided.")
+    old_password = data.get("old_password")
+    new_password = data.get("new_password")
 
+    if not old_password or not new_password:
+        raise HTTPException(status_code=422, detail="Both 'old_password' and 'new_password' are required.")
+    
+    # Verify the user's identity by checking their old password
     stored_hash = get_user_hash(profile_id)
     if not stored_hash:
         raise HTTPException(status_code=404, detail="User profile not found or not enrolled.")
-
+    
     if not verify_password(old_password, stored_hash):
-        raise HTTPException(status_code=401, detail="Old password is incorrect.")
-
-    new_password_hash = get_password_hash(new_password)
-    success = update_user_hash(profile_id, new_password_hash)
+        logger.warning(f"FAILED password change attempt for profile: {profile_id} (Incorrect old password)")
+        raise HTTPException(status_code=403, detail="Incorrect current password.")
+    
+    # If verification succeeds, hash and update the new password
+    new_hash = get_password_hash(new_password)
+    success = update_user_hash(profile_id, new_hash)
 
     if not success:
+        logger.error(f"Failed to update password in database for profile: {profile_id}")
         raise HTTPException(status_code=500, detail="Failed to update password.")
 
-    logger.info(f"Password changed successfully for profile: {profile_id}")
-    return {"status": "password changed successfully", "profile_id": profile_id}
+    logger.info(f"Successfully changed password for profile: {profile_id}")
+    return {"status": "password changed successfully"}
 
 
 @app.delete("/api/reset_profile/{profile_id}")
@@ -185,57 +191,61 @@ def train_user_data(profile_id: str, payload: Payload, background_tasks: Backgro
 
 
 @app.post("/api/score/{profile_id}")
-def score_user_data(profile_id: str, payload: Payload, background_tasks: BackgroundTasks):
+def score_user_data(profile_id: str, payload: Payload):
     """
-    Receives behavioral data during the detection phase.
+    Receives behavioral data, dissects it, and scores it with specialist models.
     """
     try:
         payload_dict = payload.dict()
         feature_vector = feature_extractor.extract_features(payload_dict)
-        result = model_manager.score(profile_id, feature_vector)
         
-        if not result["is_anomaly"]:
-            pool_size = model_manager.save_features(profile_id, feature_vector, is_retraining_sample=True)
-            model_manager.save_raw_payload(profile_id, payload_dict, is_retraining_sample=True)
-            logger.info(f"Normal sample saved for {profile_id}. Retraining pool size: {pool_size}")
-            
-            if pool_size >= model_manager.retraining_threshold:
-                logger.info(f"Retraining threshold met for {profile_id}. Scheduling retraining.")
-                background_tasks.add_task(model_manager.retrain_model, profile_id)
-        else:
+        # --- COUNT RAW EVENTS ---
+        # We calculate density here to pass to the scoring engine
+        key_count = len(payload_dict.get("keyEvents", []))
+        
+        # Count total mouse points across all paths
+        mouse_count = sum(len(path) for path in payload_dict.get("mousePaths", []))
+        
+        # Pass counts to the score method for Significance Gating
+        result = model_manager.score(profile_id, feature_vector, key_count=key_count, mouse_count=mouse_count)
+        
+        if result["is_anomaly"]:
             logger.warning(f"Anomaly detected for user {profile_id} -> "
-                           f"score={result['score']:.4f}, "
-                           f"threshold={result['threshold']:.4f}, "
-                           f"model='{result['model_used']}'")
+                           f"final_score={result['score']:.4f} "
+                           f"(mouse: {result['mouse_score']:.4f}, typing: {result['typing_score']:.4f})")
         
         return result
+        
     except ValueError as e:
         logger.warning(f"Scoring failed for {profile_id}: {e}")
         raise HTTPException(status_code=404, detail="Model not found.")
     except Exception as e:
-        logger.error(f"Error in /score for {profile_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal error during scoring.")
-
+        logger.error(f"Error in /score endpoint for {profile_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred during scoring.")
 
 @app.post("/api/test_score_row/{profile_id}")
 def test_score_row(profile_id: str, feature_row: dict):
     """
     A temporary testing endpoint.
     """
-    logger.info(f"Received test score request for profile {profile_id}")
     try:
         feature_vector = np.array([feature_row[name] for name in FEATURE_NAMES])
     except KeyError as e:
         raise HTTPException(status_code=422, detail=f"Missing feature in test data: {e}")
+
     try:
         result = model_manager.score(profile_id, feature_vector)
         log_prefix = "🚨 TEST ANOMALY:" if result['is_anomaly'] else "✅ TEST NORMAL:"
-        logger.info(f"{log_prefix} score={result['score']:.4f}, threshold={result['threshold']:.4f}, model='{result['model_used']}'")
+        
+        # Updated logging for the new score result format
+        logger.info(f"{log_prefix} final_score={result['score']:.4f} "
+                    f"(mouse: {result['mouse_score']:.4f}, typing: {result['typing_score']:.4f})")
+        
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=f"Model not found for user {profile_id}.")
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Internal error during test scoring.")
+        raise HTTPException(status_code=500, detail="An internal error during test scoring.")
 
 
 # Serving Extension auto-update files

@@ -1,5 +1,5 @@
 // API base URL
-const BASE_URL = "http://localhost:8000/api";
+const BASE_URL = "http://127.0.0.1:8000/api";
 
 // API endpoints
 export const ENDPOINTS = {
@@ -7,8 +7,8 @@ export const ENDPOINTS = {
   SCORE: (uuid) => `${BASE_URL}/score/${uuid}`,
   ENROLL: (uuid) => `${BASE_URL}/enroll/${uuid}`,
   VERIFY_PASSWORD: (uuid) => `${BASE_URL}/verify_password/${uuid}`,
-  CHANGE_PASSWORD: (uuid) => `${BASE_URL}/change_password/${uuid}`,
   RESET_PROFILE: (uuid) => `${BASE_URL}/reset_profile/${uuid}`,
+  CHANGE_PASSWORD: (uuid) => `${BASE_URL}/profile/${uuid}/password`,
 };
 
 // Storage Getters

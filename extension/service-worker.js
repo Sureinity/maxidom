@@ -130,7 +130,9 @@ async function finalizeAndSendSession() {
 async function updateActionPopup() {
   const state = await getSystemState();
   if (state === "enrollment") {
-    await chrome.action.setPopup({ popup: "frontend/dist/index.html?page=onboarding" });
+    await chrome.action.setPopup({
+      popup: "frontend/dist/index.html?page=onboarding",
+    });
   } else {
     await chrome.action.setPopup({ popup: "frontend/dist/index.html" });
   }
@@ -159,7 +161,10 @@ chrome.runtime.onStartup.addListener(async () => {
   console.log("Browser startup: Profiling session is locked by default.");
   const state = await getSystemState();
   if (state === "profiling") {
-    await broadcastToTabs({ action: "SHOW_OVERLAY", context: "profiling_lock" });
+    await broadcastToTabs({
+      action: "SHOW_OVERLAY",
+      context: "profiling_lock",
+    });
   }
   await updateActionPopup();
 });
@@ -230,12 +235,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const response = await fetch(ENDPOINTS.CHANGE_PASSWORD(uuid), {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ old_password: message.oldPassword.trim(), new_password: message.newPassword.trim() }),
+          body: JSON.stringify({
+            old_password: message.oldPassword.trim(),
+            new_password: message.newPassword.trim(),
+          }),
         });
         if (!response.ok) {
           let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-          const contentType = response.headers.get('content-type');
-          if (contentType && contentType.includes('application/json')) {
+          const contentType = response.headers.get("content-type");
+          if (contentType && contentType.includes("application/json")) {
             try {
               const errorData = await response.json();
               errorMessage = errorData.detail || errorMessage;
@@ -246,7 +254,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             // If not JSON, try to get text response
             try {
               const text = await response.text();
-              if (text.startsWith('<!DOCTYPE')) {
+              if (text.startsWith("<!DOCTYPE")) {
                 errorMessage = `Server error: ${response.status} ${response.statusText}`;
               } else {
                 errorMessage = text;
@@ -542,8 +550,8 @@ async function handleEnrollment(password, sendResponse) {
       sendResponse({ success: true });
     } else {
       let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-      const contentType = response.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
         try {
           const errorData = await response.json();
           errorMessage = errorData.detail || errorMessage;
@@ -554,7 +562,7 @@ async function handleEnrollment(password, sendResponse) {
         // If not JSON, try to get text response
         try {
           const text = await response.text();
-          if (text.startsWith('<!DOCTYPE')) {
+          if (text.startsWith("<!DOCTYPE")) {
             errorMessage = `Server error: ${response.status} ${response.statusText}`;
           } else {
             errorMessage = text;

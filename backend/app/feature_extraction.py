@@ -49,8 +49,39 @@ class FeatureExtractor:
     def extract_features(self, payload: Dict[str, Any]) -> np.ndarray:
         """Main entry point for feature extraction."""
         features = {}
-        session_duration_ms = payload["endTimestamp"] - payload["startTimestamp"]
-        session_duration_sec = max(session_duration_ms / 1000, 1)
+
+        # --- FIX: Dynamic Duration Calculation ---
+        # Service Workers can experience clock drift or resets, leading to 
+        # endTimestamp < startTimestamp. We must validate causality.
+        p_start = payload.get("startTimestamp", 0)
+        p_end = payload.get("endTimestamp", 0)
+        payload_duration = p_end - p_start
+
+        # Gather all event timestamps to find the TRUE time range if payload is suspect
+        all_timestamps = []
+        if payload.get("keyEvents"):
+            all_timestamps.extend([k["downTime"] for k in payload["keyEvents"]])
+            all_timestamps.extend([k["upTime"] for k in payload["keyEvents"]])
+        if payload.get("mousePaths"):
+            for path in payload["mousePaths"]:
+                all_timestamps.extend([p["t"] for p in path])
+        if payload.get("clicks"):
+            all_timestamps.extend([c["t"] for c in payload["clicks"]])
+            
+        # Calculate derived duration from actual events
+        if all_timestamps:
+            derived_duration = max(all_timestamps) - min(all_timestamps)
+        else:
+            derived_duration = 0
+
+        # Logic: Trust payload if valid positive duration, otherwise fallback to derived.
+        if payload_duration > 0:
+            final_duration_ms = payload_duration
+        else:
+            final_duration_ms = derived_duration
+
+        # Safety clamp: Minimum 1 second to prevent division by zero (infinite speed)
+        session_duration_sec = max(final_duration_ms / 1000, 1)
 
         mouse_paths = payload.get("mousePaths", [])
         key_events = payload.get("keyEvents", [])
