@@ -203,53 +203,76 @@ class UserModelManager:
             return None
         return joblib.load(model_path)
 
-    def score(self, profile_id, feature_vector: np.ndarray) -> Dict[str, Any]:
-        """
-        Scores new data by dissecting the session and scoring mouse and
-        typing components with their respective specialist models.
-        """
-        features_df = pd.DataFrame([feature_vector], columns=self.all_feature_names)
-        
-        is_mouse_active = features_df.iloc[0]["avg_mouse_speed"] > 0
-        is_typing_active = features_df.iloc[0]["typing_speed_kps"] > 0
-        
-        mouse_score, typing_score = 0.1, 0.1  # Default to a high "normal" score
-        mouse_threshold, typing_threshold = 0.0, 0.0
-        
-        # --- The Dissect and Score Logic ---
-        
-        # If there is mouse activity, score it with the mouse model.
-        if is_mouse_active:
-            mouse_package = self.load_model_package(profile_id, "mouse")
-            if mouse_package:
-                mouse_model = mouse_package['model']
-                mouse_threshold = mouse_package['threshold']
-                mouse_features = features_df[self.mouse_features]
-                mouse_score = mouse_model.decision_function(mouse_features)[0]
-        
-        # If there is typing activity, score it with the typing model.
-        if is_typing_active:
-            typing_package = self.load_model_package(profile_id, "typing")
-            if typing_package:
-                typing_model = typing_package['model']
-                typing_threshold = typing_package['threshold']
-                typing_features = features_df[self.typing_features]
-                typing_score = typing_model.decision_function(typing_features)[0]
-
-        # Final Decision Rule: If EITHER specialist detects an anomaly, the session is anomalous.
-        is_anomaly = (mouse_score < mouse_threshold) or (typing_score < typing_threshold)
-        
-        # For logging, return the score that is more anomalous (the lower one).
-        final_score = min(mouse_score, typing_score)
-        
-        return {
-            "is_anomaly": bool(is_anomaly), 
-            "score": float(final_score),
-            "typing_threshold": float(typing_threshold),
-            "mouse_threshold": float(mouse_threshold),
-            "mouse_score": float(mouse_score),
-            "typing_score": float(typing_score)
-        }
+    def score(self, profile_id, feature_vector: np.ndarray, key_count: int = 0, mouse_count: int = 0) -> Dict[str, Any]:
+            """
+            Scores new data with 'Significance Gating'.
+            Models only vote if there is sufficient data density.
+            """
+            features_df = pd.DataFrame([feature_vector], columns=self.all_feature_names)
+            
+            # --- CONSTANTS: Minimum Density Thresholds ---
+            # We need roughly 1 word (5-6 keys) to judge typing rhythm.
+            MIN_KEYS_FOR_VALID_SCORING = 6 
+            # We need a decent path (30 points) to judge mouse motor control.
+            MIN_MOUSE_POINTS_FOR_VALID_SCORING = 30 
+            
+            # Default to a high "normal" score (Safe Mode)
+            mouse_score, typing_score = 0.1, 0.1
+            mouse_threshold, typing_threshold = 0.0, 0.0
+            
+            # --- MOUSE SCORING ---
+            # Only score mouse if we have significant movement data
+            if mouse_count >= MIN_MOUSE_POINTS_FOR_VALID_SCORING:
+                mouse_package = self.load_model_package(profile_id, "mouse")
+                if mouse_package:
+                    mouse_model = mouse_package['model']
+                    mouse_threshold = mouse_package['threshold']
+                    mouse_features = features_df[self.mouse_features]
+                    try:
+                        mouse_score = mouse_model.decision_function(mouse_features)[0]
+                    except Exception as e:
+                        logger.error(f"Mouse scoring error: {e}")
+                        mouse_score = 0.1 # Fail open (safe) on error
+            else:
+                # If insignificant data, we consider it 'Normal' by default (Abstain)
+                logger.info(f"Mouse data sparse ({mouse_count} points). Specialist abstaining.")
+    
+            # --- TYPING SCORING ---
+            # Only score typing if we have significant keystroke data
+            if key_count >= MIN_KEYS_FOR_VALID_SCORING:
+                typing_package = self.load_model_package(profile_id, "typing")
+                if typing_package:
+                    typing_model = typing_package['model']
+                    typing_threshold = typing_package['threshold']
+                    typing_features = features_df[self.typing_features]
+                    try:
+                        typing_score = typing_model.decision_function(typing_features)[0]
+                    except Exception as e:
+                        logger.error(f"Typing scoring error: {e}")
+                        typing_score = 0.1 # Fail open (safe) on error
+            else:
+                # If insignificant data, we consider it 'Normal' by default (Abstain)
+                logger.info(f"Typing data sparse ({key_count} keys). Specialist abstaining.")
+    
+            # Final Decision Rule:
+            # Anomaly only if a VALID model returned a score below its threshold.
+            # Since we defaulted scores to 0.1 (which is > threshold), abstaining models won't trigger anomalies.
+            is_mouse_anomaly = (mouse_count >= MIN_MOUSE_POINTS_FOR_VALID_SCORING) and (mouse_score < mouse_threshold)
+            is_typing_anomaly = (key_count >= MIN_KEYS_FOR_VALID_SCORING) and (typing_score < typing_threshold)
+            
+            is_anomaly = is_mouse_anomaly or is_typing_anomaly
+            
+            # For logging, return the score that is more anomalous (the lower one) among the active ones
+            final_score = min(mouse_score, typing_score)
+            
+            return {
+                "is_anomaly": bool(is_anomaly), 
+                "score": float(final_score),
+                "typing_threshold": float(typing_threshold),
+                "mouse_threshold": float(mouse_threshold),
+                "mouse_score": float(mouse_score),
+                "typing_score": float(typing_score)
+            }
         
     def delete_user_data(self, profile_id: str) -> bool:
         """

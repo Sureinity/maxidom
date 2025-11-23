@@ -199,11 +199,17 @@ def score_user_data(profile_id: str, payload: Payload):
         payload_dict = payload.dict()
         feature_vector = feature_extractor.extract_features(payload_dict)
         
-        # The manager's score method now contains the "Dissect and Score" logic
-        result = model_manager.score(profile_id, feature_vector)
+        # --- COUNT RAW EVENTS ---
+        # We calculate density here to pass to the scoring engine
+        key_count = len(payload_dict.get("keyEvents", []))
+        
+        # Count total mouse points across all paths
+        mouse_count = sum(len(path) for path in payload_dict.get("mousePaths", []))
+        
+        # Pass counts to the score method for Significance Gating
+        result = model_manager.score(profile_id, feature_vector, key_count=key_count, mouse_count=mouse_count)
         
         if result["is_anomaly"]:
-            # Updated logging to be more informative for the new scoring method
             logger.warning(f"Anomaly detected for user {profile_id} -> "
                            f"final_score={result['score']:.4f} "
                            f"(mouse: {result['mouse_score']:.4f}, typing: {result['typing_score']:.4f})")
