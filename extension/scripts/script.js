@@ -19,24 +19,7 @@ let keydownListener = null;
 function showVerificationOverlay(context) {
   if (document.getElementById(MAXIDOM_OVERLAY_ID)) return;
 
-  // Inject Tailwind & DaisyUI only once for theme support
-  if (!document.querySelector('link[href*="tailwindcss"]')) {
-    const tailwindLink = document.createElement("link");
-    tailwindLink.rel = "stylesheet";
-    tailwindLink.href =
-      "https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css";
-    document.head.appendChild(tailwindLink);
-  }
-
-  if (!document.querySelector('link[href*="daisyui"]')) {
-    const daisyLink = document.createElement("link");
-    daisyLink.rel = "stylesheet";
-    daisyLink.href =
-      "https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css";
-    document.head.appendChild(daisyLink);
-  }
-
-  document.documentElement.setAttribute("data-theme", "dark");
+  // No external CSS injection to avoid overriding website styles
 
   const style = document.createElement("style");
   style.textContent = `
@@ -174,9 +157,8 @@ function showVerificationOverlay(context) {
   error.className = "error";
   error.id = "maxidom-error-area";
 
-  // Form behavior
-  btn.onclick = (event) => {
-    event.preventDefault();
+  // Form behavior - function to submit password
+  const submitPassword = () => {
     const password = input.value.trim();
     if (password) {
       btn.disabled = true;
@@ -187,6 +169,20 @@ function showVerificationOverlay(context) {
       });
     }
   };
+
+  // Button click handler
+  btn.onclick = (event) => {
+    event.preventDefault();
+    submitPassword();
+  };
+
+  // Enter key handler for password input
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submitPassword();
+    }
+  });
 
   body.append(title, message, input, btn, error);
   modal.appendChild(body);
