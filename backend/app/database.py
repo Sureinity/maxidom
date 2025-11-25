@@ -16,6 +16,7 @@ def init_db():
         cursor = conn.cursor()
         
         # Create the users table for storing profile IDs and hashed passwords.
+        # `profile_id` is the primary key to ensure uniqueness.
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 profile_id TEXT PRIMARY KEY,
@@ -73,5 +74,29 @@ def get_user_hash(profile_id: str) -> str | None:
     except Exception as e:
         logger.error(f"Failed to retrieve hash for user {profile_id}: {e}")
         return None
+    finally:
+        conn.close()
+
+def update_user_hash(profile_id: str, new_password_hash: str) -> bool:
+    """
+    Updates the password hash for an existing user.
+    
+    Args:
+        profile_id: The user's unique identifier.
+        new_password_hash: The new bcrypt hash to store.
+        
+    Returns:
+        True if the update was successful, False otherwise.
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("UPDATE users SET password_hash = ? WHERE profile_id = ?", (new_password_hash, profile_id))
+        conn.commit()
+        # The operation is successful if a row was actually affected.
+        return conn.total_changes > 0
+    except Exception as e:
+        logger.error(f"Failed to update hash for user {profile_id}: {e}")
+        return False
     finally:
         conn.close()

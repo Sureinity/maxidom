@@ -26,11 +26,11 @@ const Onboarding = () => {
       setMessage({ text: "Password cannot be empty.", type: "error" });
       return;
     }
-    if (password.length < 8) {
+    if (password.trim().length < 8) {
       setMessage({ text: "Password must be at least 8 characters long.", type: "error" });
       return;
     }
-    if (password !== confirmPassword) {
+    if (password.trim() !== confirmPassword.trim()) {
       setMessage({ text: "Passwords do not match.", type: "error" });
       return;
     }

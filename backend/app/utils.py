@@ -7,6 +7,7 @@ from pathlib import Path
 import joblib
 import logging
 import json
+import shutil
 from typing import Dict, List, Any
 
 logger = logging.getLogger(__name__)
@@ -24,8 +25,8 @@ THRESHOLD_PERCENTILE = 5
 
 class UserModelManager:
     """
-    Manages the lifecycle of user behavior models using a "Specialist Models" approach
-    with Dynamic Anomaly Thresholding.
+    Manages the lifecycle of user behavior models using a "Dissect and Score"
+    specialist approach with Dynamic Anomaly Thresholding.
     """
 
     def __init__(self, feature_names, user_data_dir: Path):
@@ -56,37 +57,19 @@ class UserModelManager:
         self.min_samples_for_training = 300
         self.min_keyboard_samples = 50 
         self.min_mouse_samples = 150 
-        
-        # Retraining thresholds and strategy parameters
-        self.retraining_threshold = 500
-        self.retraining_sample_size = 300 # How many samples to draw from the new data.
-        self.foundation_sample_size = 300 # How many samples to draw from the original data.
+        # Retraining parameters are removed as the model is now static.
  
     def _get_user_dir(self, profile_id) -> Path:
         """Get the directory path for a specific user, creating it if necessary."""
         user_dir = self.user_data_dir / profile_id
         user_dir.mkdir(exist_ok=True, parents=True)
         return user_dir
-    
-    def save_raw_payload(self, profile_id: str, payload_dict: dict, is_retraining_sample: bool = False):
-        """Saves the raw JSON payload to a .jsonl file for archival."""
-        user_dir = self._get_user_dir(profile_id)
-        raw_data_dir = user_dir / "raw_data"
-        raw_data_dir.mkdir(exist_ok=True)
-        
-        target_file = raw_data_dir / "retraining_raw.jsonl" if is_retraining_sample else raw_data_dir / "profiling_raw.jsonl"
-        
-        try:
-            with open(target_file, 'a') as f:
-                f.write(json.dumps(payload_dict) + '\n')
-        except Exception as e:
-            logger.error(f"Failed to save raw payload for {profile_id}: {e}")
 
-    def save_features(self, profile_id: str, feature_vector: np.ndarray, is_retraining_sample: bool = False) -> int:
-        """Saves a feature vector to the appropriate CSV file."""
+    def save_features(self, profile_id: str, feature_vector: np.ndarray) -> int:
+        """Saves a feature vector to the foundational features.csv file."""
         user_dir = self._get_user_dir(profile_id)
         
-        features_file = user_dir / "retraining_pool.csv" if is_retraining_sample else user_dir / "features.csv"
+        features_file = user_dir / "features.csv"
 
         file_exists = features_file.exists()
         with open(features_file, mode='a', newline='') as file:
@@ -112,7 +95,7 @@ class UserModelManager:
                 "total_samples": {"current": 0, "required": self.min_samples_for_training},
                 "keyboard_samples": {"current": 0, "required": self.min_keyboard_samples},
                 "mouse_samples": {"current": 0, "required": self.min_mouse_samples},
-                "digraph_samples": {"current": 0, "required": 30}, # Assuming a default, can be added to __init__
+                "digraph_samples": {"current": 0, "required": 30},
                 "is_ready": False
             }
 
@@ -131,7 +114,7 @@ class UserModelManager:
             total >= self.min_samples_for_training and
             keyboard >= self.min_keyboard_samples and
             mouse >= self.min_mouse_samples and
-            digraphs >= 30 # Assuming a default
+            digraphs >= 30
         )
 
         return {
@@ -143,7 +126,10 @@ class UserModelManager:
         }
 
     def train_initial_model(self, profile_id: str):
-        """Loads the full feature set, segments it, and trains three specialist models."""
+        """
+        Loads the full feature set and trains two pure specialist models:
+        one for all mouse activity and one for all typing activity.
+        """
         user_dir = self._get_user_dir(profile_id)
         features_file = user_dir / "features.csv"
         if not features_file.is_file():
@@ -153,16 +139,19 @@ class UserModelManager:
         try:
             df = pd.read_csv(features_file)
             
-            is_mouse_active = df["avg_mouse_speed"] > 0
-            is_typing_active = df["typing_speed_kps"] > 0
+            # Select all sessions where mouse activity occurred for the mouse model.
+            df_mouse_all = df[df["avg_mouse_speed"] > 0]
             
-            df_mouse_only = df[is_mouse_active & ~is_typing_active]
-            df_typing_only = df[~is_mouse_active & is_typing_active]
-            df_mixed = df[is_mouse_active & is_typing_active]
+            # Select all sessions where typing activity occurred for the typing model.
+            df_typing_all = df[df["typing_speed_kps"] > 0]
 
-            self._train_and_save_specialist(df_mouse_only, self.mouse_features, "mouse", profile_id)
-            self._train_and_save_specialist(df_typing_only, self.typing_features, "typing", profile_id)
-            self._train_and_save_specialist(df_mixed, self.all_feature_names, "mixed", profile_id)
+            logger.info(f"Segmenting data for {profile_id}: "
+                        f"{len(df_mouse_all)} samples for mouse model, "
+                        f"{len(df_typing_all)} samples for typing model.")
+
+            # Train and save the two specialist models. The mixed model is removed.
+            self._train_and_save_specialist(df_mouse_all, self.mouse_features, "mouse", profile_id)
+            self._train_and_save_specialist(df_typing_all, self.typing_features, "typing", profile_id)
             return True
         except Exception as e:
             logger.error(f"Error during specialist model training for {profile_id}: {e}", exc_info=True)
@@ -200,91 +189,90 @@ class UserModelManager:
             return None
         return joblib.load(model_path)
 
-    def score(self, profile_id, feature_vector: np.ndarray) -> Dict[str, Any]:
-        """Scores new data by routing it to the appropriate specialist model."""
-        features_df = pd.DataFrame([feature_vector], columns=self.all_feature_names)
+    def score(self, profile_id, feature_vector: np.ndarray, key_count: int = 0, mouse_count: int = 0) -> Dict[str, Any]:
+            """
+            Scores new data with 'Significance Gating'.
+            Models only vote if there is sufficient data density.
+            """
+            features_df = pd.DataFrame([feature_vector], columns=self.all_feature_names)
+            
+            # --- CONSTANTS: Minimum Density Thresholds ---
+            # Need roughly 1 word (5-6 keys) to judge typing rhythm.
+            MIN_KEYS_FOR_VALID_SCORING = 6 
+            # Need a decent path (30 points) to judge mouse motor control.
+            MIN_MOUSE_POINTS_FOR_VALID_SCORING = 30 
+            
+            # Default to a high "normal" score (Safe Mode)
+            mouse_score, typing_score = 0.1, 0.1
+            mouse_threshold, typing_threshold = 0.0, 0.0
+            
+            # --- MOUSE SCORING ---
+            # Only score mouse if we have significant movement data
+            if mouse_count >= MIN_MOUSE_POINTS_FOR_VALID_SCORING:
+                mouse_package = self.load_model_package(profile_id, "mouse")
+                if mouse_package:
+                    mouse_model = mouse_package['model']
+                    mouse_threshold = mouse_package['threshold']
+                    mouse_features = features_df[self.mouse_features]
+                    try:
+                        mouse_score = mouse_model.decision_function(mouse_features)[0]
+                    except Exception as e:
+                        logger.error(f"Mouse scoring error: {e}")
+                        mouse_score = 0.1 # Fail open (safe) on error
+            else:
+                # If insignificant data, consider it 'Normal' by default (Abstain)
+                logger.info(f"Mouse data sparse ({mouse_count} points). Specialist abstaining.")
+    
+            # --- TYPING SCORING ---
+            # Only score typing if we have significant keystroke data
+            if key_count >= MIN_KEYS_FOR_VALID_SCORING:
+                typing_package = self.load_model_package(profile_id, "typing")
+                if typing_package:
+                    typing_model = typing_package['model']
+                    typing_threshold = typing_package['threshold']
+                    typing_features = features_df[self.typing_features]
+                    try:
+                        typing_score = typing_model.decision_function(typing_features)[0]
+                    except Exception as e:
+                        logger.error(f"Typing scoring error: {e}")
+                        typing_score = 0.1 # Fail open (safe) on error
+            else:
+                # If insignificant data, we consider it 'Normal' by default (Abstain)
+                logger.info(f"Typing data sparse ({key_count} keys). Specialist abstaining.")
+    
+            # Final Decision Rule:
+            # Anomaly only if a VALID model returned a score below its threshold.
+            # Since scores are defaulted to 0.1 (which is > threshold), abstaining models won't trigger anomalies.
+            is_mouse_anomaly = (mouse_count >= MIN_MOUSE_POINTS_FOR_VALID_SCORING) and (mouse_score < mouse_threshold)
+            is_typing_anomaly = (key_count >= MIN_KEYS_FOR_VALID_SCORING) and (typing_score < typing_threshold)
+            
+            is_anomaly = is_mouse_anomaly or is_typing_anomaly
+            
+            # For logging, return the score that is more anomalous (the lower one) among the active ones
+            final_score = min(mouse_score, typing_score)
+            
+            return {
+                "is_anomaly": bool(is_anomaly), 
+                "score": float(final_score),
+                "typing_threshold": float(typing_threshold),
+                "mouse_threshold": float(mouse_threshold),
+                "mouse_score": float(mouse_score),
+                "typing_score": float(typing_score)
+            }
         
-        is_mouse_active = features_df.iloc[0]["avg_mouse_speed"] > 0
-        is_typing_active = features_df.iloc[0]["typing_speed_kps"] > 0
-        
-        model_type = "mixed"
-        feature_subset = self.all_feature_names
-        if is_mouse_active and not is_typing_active:
-            model_type = "mouse"
-            feature_subset = self.mouse_features
-        elif not is_mouse_active and is_typing_active:
-            model_type = "typing"
-            feature_subset = self.typing_features
-        
-        logger.info(f"Routing to '{model_type}' model for scoring.")
-        
-        model_package = self.load_model_package(profile_id, model_type)
-        if model_package is None:
-            logger.warning(f"Specialist model '{model_type}' not found for {profile_id}. Falling back to 'mixed' model.")
-            model_package = self.load_model_package(profile_id, "mixed")
-            model_type = "mixed"
-            feature_subset = self.all_feature_names
-            if model_package is None:
-                raise ValueError(f"No suitable models found for user {profile_id}")
-
-        model = model_package['model']
-        dynamic_threshold = model_package['threshold']
-        
-        score_features = features_df[feature_subset]
-        score = model.decision_function(score_features)[0]
-        
-        is_anomaly = score < dynamic_threshold
-        
-        return {"is_anomaly": bool(is_anomaly), "score": float(score), "model_used": model_type, "threshold": float(dynamic_threshold)}
-
-    def retrain_model(self, profile_id: str):
+    def delete_user_data(self, profile_id: str) -> bool:
         """
-        Retrains specialist models using a balanced, weighted sample of
-        foundational and recent behavioral data to prevent model drift.
+        Permanently deletes all data associated with a profile ID.
         """
         user_dir = self._get_user_dir(profile_id)
-        features_file = user_dir / "features.csv"
-        retraining_file = user_dir / "retraining_pool.csv"
+        if not user_dir.exists():
+            logger.info(f"No data directory to delete for profile: {profile_id}")
+            return True
         
-        if not features_file.is_file() or not retraining_file.is_file():
-            logger.warning(f"Retraining aborted for {profile_id}: Missing foundational or retraining data.")
-            return False
-
         try:
-            original_df = pd.read_csv(features_file)
-            retraining_df = pd.read_csv(retraining_file)
-            
-            logger.info(f"Starting weighted sampling for retraining user {profile_id}.")
-
-            # Handle cases where we don't have enough data to meet the sample size
-            n_foundation = min(self.foundation_sample_size, len(original_df))
-            n_retraining = min(self.retraining_sample_size, len(retraining_df))
-            
-            foundation_sample = original_df.sample(n=n_foundation, replace=False, random_state=42)
-            retraining_sample = retraining_df.sample(n=n_retraining, replace=False, random_state=42)
-            
-            combined_df = pd.concat([foundation_sample, retraining_sample], ignore_index=True)
-            logger.info(f"Created balanced training set of {len(combined_df)} samples ({n_foundation} foundational, {n_retraining} recent).")
-            
-            # Re-run the same segmentation and training logic as the initial training
-            is_mouse_active = combined_df["avg_mouse_speed"] > 0
-            is_typing_active = combined_df["typing_speed_kps"] > 0
-            
-            df_mouse_only = combined_df[is_mouse_active & ~is_typing_active]
-            df_typing_only = combined_df[~is_mouse_active & is_typing_active]
-            df_mixed = combined_df[is_mouse_active & is_typing_active]
-            
-            logger.info(f"Retraining specialist models for user {profile_id}...")
-            
-            self._train_and_save_specialist(df_mouse_only, self.mouse_features, "mouse", profile_id)
-            self._train_and_save_specialist(df_typing_only, self.typing_features, "typing", profile_id)
-            self._train_and_save_specialist(df_mixed, self.all_feature_names, "mixed", profile_id)
-            
-            # Clear retraining pool after successful retraining
-            retraining_file.write_text(f"timestamp,{','.join(self.all_feature_names)}\n")
-            logger.info(f"Retraining pool cleared for user {profile_id}")
-            
+            shutil.rmtree(user_dir)
+            logger.info(f"Successfully deleted all data for profile: {profile_id}")
             return True
         except Exception as e:
-            logger.error(f"Error retraining model for user {profile_id}: {e}", exc_info=True)
+            logger.error(f"Failed to delete data directory for profile {profile_id}: {e}", exc_info=True)
             return False
