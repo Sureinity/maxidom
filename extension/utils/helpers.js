@@ -38,3 +38,17 @@ export async function clearProfilingProgress() {
   await chrome.storage.local.remove("profiling_progress");
   console.log("Profiling progress has been cleared.");
 }
+
+// Lock Management Functions
+export async function getProfilingLockStatus() {
+  // Defaults to FALSE (Locked) if not set
+  const result = await chrome.storage.local.get("is_profiling_unlocked");
+  return result.is_profiling_unlocked === true;
+}
+
+export async function setProfilingLockStatus(isUnlocked) {
+  await chrome.storage.local.set({ is_profiling_unlocked: isUnlocked });
+  console.log(
+    `Profiling lock status set to: ${isUnlocked ? "UNLOCKED" : "LOCKED"}`,
+  );
+}

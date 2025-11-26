@@ -5,6 +5,8 @@ import {
   setSystemState,
   setProfilingProgress,
   clearProfilingProgress,
+  getProfilingLockStatus,
+  setProfilingLockStatus,
 } from "./utils/helpers.js";
 
 // Hybrid Model Constants
@@ -24,8 +26,9 @@ let mousedownEvent = null;
 
 // New state lock to prevent race conditions during session finalization.
 let isFinalizing = false;
-// New state variable to manage the profiling lockdown.
-let isProfilingUnlocked = false;
+
+// REMOVED: global isProfilingUnlocked variable.
+// Now use getProfilingLockStatus() from storage to survive Service Worker termination.
 
 // State to track if overlay should be shown
 let overlayState = { showOverlay: false, context: null };
@@ -74,7 +77,33 @@ async function finalizeAndSendSession() {
   // Set the lock to prevent new events from being processed.
   isFinalizing = true;
 
-  sessionData.endTimestamp = performance.now();
+  // --- FIX: Causality Check for Time Travel Bug ---
+  // Instead of relying solely on performance.now(), which can drift if the Service Worker sleeps,
+  // derive the end timestamp from the latest actual event in the session.
+  let lastEventTime = sessionData.startTimestamp;
+
+  // Check Key Events
+  if (sessionData.keyEvents.length > 0) {
+    const lastKey = sessionData.keyEvents[sessionData.keyEvents.length - 1];
+    if (lastKey.upTime > lastEventTime) lastEventTime = lastKey.upTime;
+  }
+  // Check Mouse Paths
+  if (sessionData.mousePaths.length > 0) {
+    const lastPath = sessionData.mousePaths[sessionData.mousePaths.length - 1];
+    if (lastPath.length > 0) {
+      const lastPoint = lastPath[lastPath.length - 1];
+      if (lastPoint.t > lastEventTime) lastEventTime = lastPoint.t;
+    }
+  }
+  // Check Clicks
+  if (sessionData.clicks.length > 0) {
+    const lastClick = sessionData.clicks[sessionData.clicks.length - 1];
+    if (lastClick.t > lastEventTime) lastEventTime = lastClick.t;
+  }
+
+  // Ensure End is at least Start, and fallback to performance.now() if it's valid
+  sessionData.endTimestamp = Math.max(lastEventTime, performance.now());
+  // --- END FIX ---
 
   // Finalize any pending mouse path before sending.
   if (sessionData.currentMousePath && sessionData.currentMousePath.length > 0) {
@@ -121,7 +150,7 @@ async function finalizeAndSendSession() {
     );
   }
 
-  // For paths 2 and 3, we simply discard the data and reset.
+  // For paths 2 and 3, simply discard the data and reset.
   resetSessionData();
   isFinalizing = false;
 }
@@ -144,6 +173,8 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     const newUUID = crypto.randomUUID();
     await chrome.storage.local.set({ profile_uuid: newUUID });
     await setSystemState("enrollment");
+    // Ensure lock is set to safe default (Locked = false)
+    await setProfilingLockStatus(false);
     console.log(
       "New profile UUID created. System state set to enrollment.",
       newUUID,
@@ -157,7 +188,8 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
 // Listener for when the browser starts up. This is our primary LOCK trigger.
 chrome.runtime.onStartup.addListener(async () => {
-  isProfilingUnlocked = false;
+  // FORCE LOCK ON BROWSER START via Storage
+  await setProfilingLockStatus(false);
   console.log("Browser startup: Profiling session is locked by default.");
   const state = await getSystemState();
   if (state === "profiling") {
@@ -172,7 +204,9 @@ chrome.runtime.onStartup.addListener(async () => {
 // Listener for new windows to enforce lockdown.
 chrome.windows.onCreated.addListener(async (window) => {
   const state = await getSystemState();
-  if (state === "profiling" && !isProfilingUnlocked) {
+  const isUnlocked = await getProfilingLockStatus(); // READ FROM STORAGE
+
+  if (state === "profiling" && !isUnlocked) {
     const tabs = await chrome.tabs.query({ active: true, windowId: window.id });
     if (tabs[0]) {
       setTimeout(() => {
@@ -281,9 +315,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   (async () => {
     const currentState = await getSystemState();
+    const isUnlocked = await getProfilingLockStatus(); // READ FROM STORAGE
 
     if (
-      (currentState === "profiling" && !isProfilingUnlocked) ||
+      (currentState === "profiling" && !isUnlocked) ||
       currentState === "awaiting_verification"
     ) {
       if (message.type === "PASSWORD_SUBMITTED") {
@@ -344,10 +379,12 @@ async function broadcastToTabs(message) {
 // This function now sends the correct context based on the global state.
 async function handleContentScriptReady(sender) {
   const currentState = await getSystemState();
+  const isUnlocked = await getProfilingLockStatus(); // READ FROM STORAGE
+
   let context = null;
   if (currentState === "awaiting_verification") {
     context = "anomaly";
-  } else if (currentState === "profiling" && !isProfilingUnlocked) {
+  } else if (currentState === "profiling" && !isUnlocked) {
     context = "profiling_lock";
   }
   if (context) {
@@ -545,7 +582,7 @@ async function handleEnrollment(password, sendResponse) {
     });
     if (response.ok) {
       await setSystemState("profiling");
-      isProfilingUnlocked = true;
+      await setProfilingLockStatus(true); // UNLOCK after enrollment
       await updateActionPopup();
       sendResponse({ success: true });
     } else {
@@ -593,7 +630,7 @@ async function handlePasswordVerification(password, context) {
     if (result.verified) {
       console.log("Password verification successful.");
       if (context === "profiling_unlock") {
-        isProfilingUnlocked = true;
+        await setProfilingLockStatus(true); // WRITE TO STORAGE
         console.log("Profiling unlocked for this browser session.");
       } else {
         await setSystemState("detection");
@@ -647,12 +684,12 @@ async function handleProfileReset() {
     await clearProfilingProgress();
 
     // Ensure the lockdown is active for the new profiling session.
-    isProfilingUnlocked = false;
+    await setProfilingLockStatus(false); // LOCK ON RESET
 
     // Update the popup to the normal UI (it will show profiling progress).
     await updateActionPopup();
 
-    // 5. DO NOT open onboarding.html. Instead, broadcast the lockdown command
+    // DO NOT open onboarding.html. Instead, broadcast the lockdown command
     // to all open tabs, forcing the user to re-authenticate to begin profiling.
     await broadcastToTabs({
       action: "SHOW_OVERLAY",
