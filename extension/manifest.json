@@ -34,5 +34,11 @@
         "<all_urls>"
       ]
     }
-  ]
+  ],
+  "icons":{
+    "16": "images/MaxiDOM-favicon-16.png",
+    "32": "images/MaxiDOM-favicon-32",
+    "48": "images/MaxiDOM-favicon-48.png",
+    "128": "images/MaxiDOM-favicon-128.png"
+  }
 }
