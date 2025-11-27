@@ -27,7 +27,7 @@ let mousedownEvent = null;
 // New state lock to prevent race conditions during session finalization.
 let isFinalizing = false;
 
-// REMOVED: global isProfilingUnlocked variable.
+// REMOVED: global 'isProfilingUnlocked' variable.
 // Now use getProfilingLockStatus() from storage to survive Service Worker termination.
 
 // State to track if overlay should be shown
@@ -80,6 +80,7 @@ async function finalizeAndSendSession() {
   // --- FIX: Causality Check for Time Travel Bug ---
   // Instead of relying solely on performance.now(), which can drift if the Service Worker sleeps,
   // derive the end timestamp from the latest actual event in the session.
+  // This prevents negative durations or 1-second sessions for long activities.
   let lastEventTime = sessionData.startTimestamp;
 
   // Check Key Events
@@ -101,7 +102,7 @@ async function finalizeAndSendSession() {
     if (lastClick.t > lastEventTime) lastEventTime = lastClick.t;
   }
 
-  // Ensure End is at least Start, and fallback to performance.now() if it's valid
+  // Ensure End is at least Start, falling back to performance.now() only if valid.
   sessionData.endTimestamp = Math.max(lastEventTime, performance.now());
   // --- END FIX ---
 
@@ -150,7 +151,7 @@ async function finalizeAndSendSession() {
     );
   }
 
-  // For paths 2 and 3, simply discard the data and reset.
+  // For paths 2 and 3, we simply discard the data and reset.
   resetSessionData();
   isFinalizing = false;
 }
@@ -159,16 +160,19 @@ async function finalizeAndSendSession() {
 async function updateActionPopup() {
   const state = await getSystemState();
   if (state === "enrollment") {
-    // FIX: Set popup to empty string when in enrollment.
+    // UX FIX: Set popup to empty string when in enrollment.
     // This disables the small bubble and forces the 'onClicked' event to fire,
-    // allowing redirection to the full-page tab smoothly.
+    // allowing us to redirect to the full-page tab smoothly.
     await chrome.action.setPopup({ popup: "" });
   } else {
+    // Standard behavior for other states
     await chrome.action.setPopup({ popup: "frontend/dist/index.html" });
   }
 }
 
-// NEW LISTENER: Handle clicks when the popup is disabled (Enrollment Mode)
+// Chrome Listeners
+
+// UX FIX LISTENER: Handle clicks when the popup is disabled (Enrollment Mode)
 chrome.action.onClicked.addListener(async () => {
   const state = await getSystemState();
   if (state === "enrollment") {
@@ -176,17 +180,37 @@ chrome.action.onClicked.addListener(async () => {
       "frontend/dist/index.html?page=onboarding",
     );
 
-    // User Experience Polish: Check if the tab is already open to prevent duplicates.
+    // Check if the tab is already open to avoid duplicates
     const tabs = await chrome.tabs.query({ url: onboardingUrl });
 
     if (tabs.length > 0) {
-      // If open, just focus it
       await chrome.tabs.update(tabs[0].id, { active: true });
       await chrome.windows.update(tabs[0].windowId, { focused: true });
     } else {
-      // If not, create it
       await chrome.tabs.create({ url: onboardingUrl });
     }
+  }
+});
+
+chrome.runtime.onInstalled.addListener(async (details) => {
+  if (details.reason === "install") {
+    const newUUID = crypto.randomUUID();
+    await chrome.storage.local.set({ profile_uuid: newUUID });
+    await setSystemState("enrollment");
+
+    // Ensure lock is set to safe default (Locked = false)
+    await setProfilingLockStatus(false);
+
+    console.log(
+      "New profile UUID created. System state set to enrollment.",
+      newUUID,
+    );
+    await updateActionPopup();
+
+    // Automatically open onboarding on fresh install
+    chrome.tabs.create({ url: "frontend/dist/index.html?page=onboarding" });
+  } else if (details.reason === "update") {
+    await updateActionPopup();
   }
 });
 
@@ -208,7 +232,8 @@ chrome.runtime.onStartup.addListener(async () => {
 // Listener for new windows to enforce lockdown.
 chrome.windows.onCreated.addListener(async (window) => {
   const state = await getSystemState();
-  const isUnlocked = await getProfilingLockStatus(); // READ FROM STORAGE
+  // READ FROM STORAGE instead of memory variable
+  const isUnlocked = await getProfilingLockStatus();
 
   if (state === "profiling" && !isUnlocked) {
     const tabs = await chrome.tabs.query({ active: true, windowId: window.id });
@@ -319,7 +344,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   (async () => {
     const currentState = await getSystemState();
-    const isUnlocked = await getProfilingLockStatus(); // READ FROM STORAGE
+    // READ FROM STORAGE instead of memory variable
+    const isUnlocked = await getProfilingLockStatus();
 
     if (
       (currentState === "profiling" && !isUnlocked) ||
@@ -383,7 +409,8 @@ async function broadcastToTabs(message) {
 // This function now sends the correct context based on the global state.
 async function handleContentScriptReady(sender) {
   const currentState = await getSystemState();
-  const isUnlocked = await getProfilingLockStatus(); // READ FROM STORAGE
+  // READ FROM STORAGE instead of memory variable
+  const isUnlocked = await getProfilingLockStatus();
 
   let context = null;
   if (currentState === "awaiting_verification") {
@@ -634,7 +661,8 @@ async function handlePasswordVerification(password, context) {
     if (result.verified) {
       console.log("Password verification successful.");
       if (context === "profiling_unlock") {
-        await setProfilingLockStatus(true); // WRITE TO STORAGE
+        // WRITE TO STORAGE
+        await setProfilingLockStatus(true);
         console.log("Profiling unlocked for this browser session.");
       } else {
         await setSystemState("detection");
