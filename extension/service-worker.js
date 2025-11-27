@@ -159,30 +159,34 @@ async function finalizeAndSendSession() {
 async function updateActionPopup() {
   const state = await getSystemState();
   if (state === "enrollment") {
-    await chrome.action.setPopup({
-      popup: "frontend/dist/index.html?page=onboarding",
-    });
+    // FIX: Set popup to empty string when in enrollment.
+    // This disables the small bubble and forces the 'onClicked' event to fire,
+    // allowing redirection to the full-page tab smoothly.
+    await chrome.action.setPopup({ popup: "" });
   } else {
     await chrome.action.setPopup({ popup: "frontend/dist/index.html" });
   }
 }
 
-// Chrome Listeners
-chrome.runtime.onInstalled.addListener(async (details) => {
-  if (details.reason === "install") {
-    const newUUID = crypto.randomUUID();
-    await chrome.storage.local.set({ profile_uuid: newUUID });
-    await setSystemState("enrollment");
-    // Ensure lock is set to safe default (Locked = false)
-    await setProfilingLockStatus(false);
-    console.log(
-      "New profile UUID created. System state set to enrollment.",
-      newUUID,
+// NEW LISTENER: Handle clicks when the popup is disabled (Enrollment Mode)
+chrome.action.onClicked.addListener(async () => {
+  const state = await getSystemState();
+  if (state === "enrollment") {
+    const onboardingUrl = chrome.runtime.getURL(
+      "frontend/dist/index.html?page=onboarding",
     );
-    await updateActionPopup();
-    chrome.tabs.create({ url: "frontend/dist/index.html?page=onboarding" });
-  } else if (details.reason === "update") {
-    await updateActionPopup();
+
+    // User Experience Polish: Check if the tab is already open to prevent duplicates.
+    const tabs = await chrome.tabs.query({ url: onboardingUrl });
+
+    if (tabs.length > 0) {
+      // If open, just focus it
+      await chrome.tabs.update(tabs[0].id, { active: true });
+      await chrome.windows.update(tabs[0].windowId, { focused: true });
+    } else {
+      // If not, create it
+      await chrome.tabs.create({ url: onboardingUrl });
+    }
   }
 });
 
