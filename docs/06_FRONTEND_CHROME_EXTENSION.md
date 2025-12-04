@@ -1,97 +1,86 @@
-# 06. Frontend: Chrome Extension
+# 06. Frontend: Chrome Extension (Manifest V3)
 
 ---
 
 ### 1. Role and Design Philosophy
 
-The MaxiDOM Chrome Extension is designed as a **lightweight, passive sensor and active responder**. Its primary responsibility is to capture user interaction data with minimal performance impact and to act on commands from the backend.
+The MaxiDOM Chrome Extension acts as an **intelligent, persistent sensor** and **security enforcer**. Unlike traditional "passive" collectors, it manages its own lifecycle state to ensure security survives browser restarts and Service Worker termination.
 
--   **Lightweight**: It performs only basic data aggregation and avoids heavy computation.
--   **Passive Sensor**: It runs in the background, continuously collecting behavioral data.
--   **Active Responder**: When an anomaly is detected, it actively challenges the user by injecting a password prompt to verify their identity.
+-   **Intelligent Batching**: It uses a Hybrid Event-Driven model to group interactions into logical "Sessions" rather than fixed time windows.
+-   **State Persistence**: It uses `chrome.storage.local` to maintain the "Locked/Unlocked" security state, overcoming the ephemeral nature of Manifest V3 Service Workers.
+-   **Active Enforcer**: It physically blocks user interaction via a DOM Overlay when an anomaly is detected or upon browser startup.
 
 ### 2. File Structure
 
-The extension is composed of key files that work together to perform its functions.
-
 | File | Role |
 | :--- | :--- |
-| **`manifest.json`** | **The Blueprint**: Defines the extension's metadata, permissions, and scripts. |
-| **`content.js`** | **The Listener & Interactor**: Injected into every webpage. It listens for DOM events and is also responsible for injecting and managing the password overlay UI. |
-| **`service_worker.js`** | **The Brain**: The central coordinator. It receives raw events, aggregates them, manages state, and handles all communication with the backend API. |
-| **`onboarding.html`** | **The Enrollment Page**: A dedicated page for the one-time user enrollment process, where the verification password is set. |
-
-### 3. Operational Logic
-
-The extension's workflow can be broken down into distinct stages.
-
-#### 3.1. Enrollment (One-Time Setup)
-
--   Upon first installation, the user is directed to `onboarding.html`.
--   The user sets their verification password.
--   The script in the onboarding page sends the password to `service_worker.js`, which securely transmits it to the `POST /enroll/{profile_id}` endpoint.
--   Once enrollment is successful, the extension's `system_state` is set to `"profiling"`.
-
-#### 3.2. Data Collection (`content.js`)
-
-1. **Capture**: The `content.js` script attaches event listeners to the DOM for all relevant behavioral events (mouse, key, scroll, etc.).
-2. **Forwarding**: When an event fires, `content.js` sends the raw event data (e.g., `{type: 'mousemove', t: 167..., x: 100, y: 150}`) to `service_worker.js` using `chrome.runtime.sendMessage`.
-3. **Aggregation**: The `service_worker.js` script listens for these messages. It maintains a central buffer where it performs "lightweight aggregation":
-    - Pairs corresponding `keydown` and `keyup` events into single objects.
-    - Groups sequences of `mousemove` events into distinct "paths".
-    - Calculates click duration by matching `mousedown` and `mouseup`.
-
-#### 3.3. Data Aggregation & Backend Communication (`service_worker.js`)
-
--   The background script buffers and aggregates raw events into the structured JSON payload.
--   A timer triggers the data sending process every 30 seconds of activity.
--   Based on the `system_state` ("profiling" or "detection"), it sends the payload to either the `/train` or `/score` endpoint.
--   It listens for the response from the backend. If the response from `/score` contains `{"is_anomaly": true}`, it initiates the Active Response flow.
-
-### 4. Active Response: The Password Prompt Flow
-
-This flow is triggered when the backend flags an anomaly.
-
-1.  **Initiation (`service_worker.js`)**: The background script receives the anomaly flag and immediately sends a message to the active tab's `content.js` script, instructing it to display the password prompt.
-2.  **UI Injection (`content.js`)**: The content script dynamically creates and injects a secure overlay into the current page. This overlay consists of a full-page semi-transparent background and a centered modal with a password input field and a submit button.
-3.  **User Input Handling (`content.js` -> `service_worker.js`)**: When the user enters their password and submits the form, the `content.js` script captures the input and sends it back to `service_worker.js`.
-4.  **Verification Request (`service_worker.js`)**: The background script receives the password attempt and makes a `fetch` call to the `POST /verify_password/{profile_id}` endpoint.
-5.  **Handling the Result (`service_worker.js` -> `content.js`)**: The background script receives the verification result (`{"verified": true/false}`) and relays it to `content.js`.
-    -   If `verified` is `true`, the content script removes the overlay from the DOM.
-    -   If `verified` is `false`, the content script displays an "Incorrect password" error message within the overlay, allowing the user to try again.
+| **`manifest.json`** | **Configuration**: Defines permissions (`storage`, `scripting`), host permissions, and the service worker entry point. |
+| **`script.js`** | **Content Script**: Injected into pages. Captures raw DOM events (`mousemove`, `keydown`) and manages the **Lockdown Overlay** UI. |
+| **`service-worker.js`** | **The Controller**: Handles data aggregation, API communication, and state management. Implements the "Time Travel" fix and Session logic. |
+| **`utils/helpers.js`** | **State Manager**: Wrappers for `chrome.storage.local` to handle UUIDs, system state (`profiling`/`detection`), and lock status. |
+| **`popup.js` / `.html`** | **Dashboard**: Displays profiling progress and manages profile resets/password changes. |
+| **`onboarding.js` / `.html`** | **Enrollment**: A standalone full-page tab for the initial password setup. |
 
 ---
 
-### 5. Visualization
+### 3. Operational Logic
 
-The following diagram illustrates the internal data flow within the Chrome Extension, including the anomaly response loop.
+#### 3.1. Enrollment (The "Action Redirect" Pattern)
+To ensure a smooth onboarding experience, the extension uses a specific UX pattern:
+1.  **State Check**: If the system state is `"enrollment"`, the Service Worker programmatically **disables the popup bubble** (`chrome.action.setPopup({popup: ""})`).
+2.  **Click Handler**: It listens for `chrome.action.onClicked`.
+3.  **Redirect**: When clicked, it opens (or focuses) `onboarding.html` in a full tab.
+4.  **Completion**: Upon successful password registration (`POST /enroll`), the state switches to `"profiling"`, the popup is re-enabled, and the browser session is unlocked.
+
+#### 3.2. The Hybrid Data Collector (`service-worker.js`)
+Instead of a simple timer, the collector uses three triggers to define a "Session":
+1.  **Inactivity Trigger**: 5 seconds of no user input forces a session flush.
+2.  **Safety Net 1 (Duration)**: 90 seconds max duration to prevent massive payloads.
+3.  **Safety Net 2 (Capacity)**: 2000 events max to prevent memory overflows.
+
+**Noise Filtering**: Before sending data to the backend, the collector checks if `Total Events > 20`. If not, the data is discarded locally. This prevents "micro-sessions" (e.g., clicking one link) from polluting the training data.
+
+**The "Time Travel" Fix**:
+Service Workers can sleep and wake up, causing `performance.now()` to drift or reset. The collector implements a **Causality Check**: it scans all events in the buffer to find the *true* last timestamp and ensures `endTimestamp >= startTimestamp`.
+
+#### 3.3. Lockdown & Persistence (`helpers.js`)
+Manifest V3 Service Workers die after ~30 seconds of inactivity. To prevent the extension from "forgetting" that the user unlocked their profile:
+-   **Storage**: The `isProfilingUnlocked` flag is stored in **`chrome.storage.local`**.
+-   **Browser Startup**: `chrome.runtime.onStartup` explicitly sets this flag to `false` (Locked).
+-   **Runtime**: When the Service Worker wakes up, it reads from Storage, not memory.
+
+### 4. Active Response: The Verification Loop
+
+When the Backend returns `{"is_anomaly": true}` or when the browser starts up:
+
+1.  **Broadcast**: `service-worker.js` broadcasts `Action: SHOW_OVERLAY` to all active tabs.
+2.  **Injection**: `script.js` creates a Shadow DOM overlay that consumes all mouse/keyboard events (`capture: true`), physically preventing interaction with the web page.
+3.  **Verification**:
+    -   User enters password in the overlay.
+    -   `script.js` sends it to `service-worker.js`.
+    -   `service-worker.js` calls `POST /api/verify_password`.
+4.  **Resolution**:
+    -   **Success**: `service-worker.js` updates `chrome.storage.local` to `unlocked` and broadcasts `HIDE_OVERLAY`.
+    -   **Failure**: The overlay displays an error and remains in place.
+
+---
+
+### 5. Data Flow Diagram
 
 ```mermaid
 graph TD
-    subgraph "Data Collection Flow"
-        A[DOM Events] --> B(content.js);
-        B --> C(service_worker.js);
-        C --> D[Aggregates Data];
-        D --> E[POST /score or /train];
-        E --> F[Backend API];
+    User(👤 Interaction) --> Content[script.js]
+    Content -- "Raw Events" --> SW[service-worker.js]
+    
+    subgraph "Service Worker Logic"
+        SW --> Buffer[Event Buffer]
+        Buffer --> Check{Triggers Met - 5s idle or 90s max}
+        Check -- "Yes" --> Filter{Events > 20?}
+        Filter -- "Yes" --> Fix[Time Travel Fix]
+        Fix --> API[POST /score]
     end
     
-    F --> G{API Response};
-    G --> H{is_anomaly == true?};
-    
-    subgraph "Normal Path"
-        H -- "No" --> I([Continue Monitoring]);
-    end
-
-    subgraph "Anomaly Response Flow"
-        H -- "Yes" --> J[service_worker.js sends<br>message to content.js];
-        J --> K[content.js injects<br>Password Overlay];
-        L(👤 User enters password) --> K;
-        K --> M[content.js sends<br>password to service_worker.js];
-        M --> N[service_worker.js sends<br>POST /verify_password];
-        N --> F;
-        G --> |"Verification response received"| O{Verification Response};
-        O -- "True" --> P[content.js removes overlay];
-        O -- "False" --> Q[content.js shows error];
-    end
+    API -- "Anomaly Detected" --> SW
+    SW -- "SHOW_OVERLAY" --> Content
+    Content -- "Blocks UI" --> User
 ```

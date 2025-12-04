@@ -1,131 +1,111 @@
 # 08. Machine Learning Model Lifecycle
 
-This document provides a comprehensive overview of the MaxiDOM system's machine learning process, detailing the journey of a personalized model from its creation to its continuous, adaptive evolution.
+This document details the lifecycle of the biometric models in MaxiDOM. Unlike traditional systems that use a single, evolving model, MaxiDOM employs a **Static, Multi-Modal Specialist Architecture** to ensure security integrity and reproducibility.
 
 ---
 
 ### 1. The Core Algorithm: Isolation Forest
 
-The entire detection system is built around Scikit-learn's `IsolationForest`. This algorithm was chosen for several critical reasons:
+The system uses **Scikit-learn's `IsolationForest`**. This algorithm was chosen for specific security properties:
 
--   **Designed for Anomaly Detection**: It is an unsupervised algorithm that excels at identifying outliers in a dataset without needing labeled examples of "bad" behavior.
--   **No Need for Impersonator Data**: It learns the boundaries of "normal" behavior. Anything that falls outside these boundaries is flagged as an anomaly. This is perfect for our use case, as we only have access to the legitimate user's data.
--   **Efficiency**: It is computationally efficient for both training and prediction, making it suitable for a near real-time system.
-
-### 2. The Model Lifecycle
-
-Each user profile (`profile_id`) has its own dedicated model that progresses through a continuous, four-phase lifecycle.
-
-#### Phase 1: Profiling (Cold Start)
-
-This is the initial data-gathering phase for a new user, designed to build a robust foundational profile.
-
--   **Trigger**: A new `profile_id` is created for which no model exists.
--   **Process**: 
-	1. The Chrome Extension enters the `"profiling"` state.
-	2. The Chrome Extension sends all aggregated behavioral data to the `POST /train/{profile_id}` endpoint. 
-	3. The backend receives the data, runs it through the Feature Extraction engine, and stores the resulting feature vectors to `training_pool`.
-
--   **Completion and Training Threshold**: This phase ends when a predefined number of feature vectors has been collected. For this project, the threshold is set to **300 samples**. This value was chosen systematically:
-    1.  **Statistical Robustness**: It provides over 15 data points for each of the **18 features** in the model, satisfying machine learning best practices for avoiding underfitting.
-    2.  **User Experience**: It corresponds to approximately **2.5 hours** of active browser usage, which is a reasonable and achievable learning period for a new user.
-    
-    Once the 300-sample threshold is met, the initial training phase is automatically triggered.
-
-#### Phase 2: Initial Training
-
-Once the profiling phase is complete, the first version of the model is created.
-
--   **Trigger**: The completion of the profiling phase.
--   **Process**:
-    1.  A background job gathers all 300 feature vectors from the user's `training_pool`.
-    2.  An `IsolationForest` model is trained (`.fit()`) on this entire dataset.
-    3.  The trained model object is serialized and saved to disk (e.g., `./models/{profile_id}.joblib`).
--   **Outcome**: The foundational `training_pool` data is **permanently retained** for future retraining. The user's `system_state` is then switched to `"detection"` and a baseline model for "normal" behavior exists.
-
-#### Phase 3: Detection and Active Response
-
-This is the standard operational mode. The system's response bifurcates based on the model's output.
-
-- **Trigger**:  
-  The client sends behavioral data to the `POST /score/{profile_id}` endpoint.
-
-- **Process**:  
-  1. The backend loads the user's specific model from disk.
-  2. Features are extracted from the incoming JSON payload and scored.
-  3. The model returns a score, which determines the response path:
-
-     - **✅ Normal Path (Score ≥ 0)**  
-       - Behavior is considered **normal**.  
-       - `is_anomaly` is set to `false`.  
-       - The feature vector is added to the `retraining_pool` as part of the feedback loop.
-
-     - **❗ Anomaly Path (Score < 0)**  
-       - Behavior is considered **anomalous**.  
-       - `is_anomaly` is set to `true`.  
-       - The backend **takes no further action**.  
-       - It becomes the **client’s responsibility** to initiate **step-up authentication** by prompting the user for their password.
-
-#### Phase 4: Retraining (The Feedback Loop)
-
-Users' habits change over time. This "concept drift" would eventually cause a static model to produce false positives. The feedback loop is an automated retraining mechanism that keeps the model current with the user's evolving behavior while maintaining stability. The system uses a **two-pool data management strategy** to achieve this.
-
-The workflow is as follows:
-
-1.  **Gatekeeping & Filtering**: When data from the `/score` endpoint is classified as **normal**, its feature vector is considered a trusted sample. Anomalous data is discarded and never used for retraining.
-
-2.  **Populating the Retraining Pool**: The trusted feature vector is appended to a dedicated, temporary `retraining_pool` (e.g., `./retraining_pool/{profile_id}.csv`).
-
-3.  **Triggering Retraining**: Retraining is triggered when the `retraining_pool` reaches a predefined size. This threshold is deliberately set higher than the initial training threshold to ensure model stability. For this project, the threshold is set to **500 new samples**.
-
-> **Design Choice: Why a Higher Retraining Threshold?**
->
-> The initial training threshold (300 samples) is designed to build a foundational profile quickly. The retraining threshold (500 samples) is designed to ensure the model only adapts to significant, sustained changes in behavior, not short-term noise. This larger data requirement provides a stronger signal of genuine concept drift and gives the model a healthy "inertia," preventing it from overreacting to temporary fluctuations.
-
-4.  **Training the New Model**: A background job is launched to perform the following steps:
-    -   **Data Combination**: The job loads data from **both** the permanent, foundational `training_pool` and the current `retraining_pool`. The two datasets are concatenated.
-    -   **Training from Scratch**: A brand new `IsolationForest` model is trained on this combined dataset.
-    -   **Safe Overwrite via Atomic Operation**: The old model is overwritten using a safe, atomic operation. The newly trained model is first saved to a temporary file, which is then atomically renamed to replace the old model file. This guarantees a seamless transition with no risk of a corrupted model. The old model is permanently discarded.
-
-5.  **Completing the Cycle**: After the new model is successfully deployed, the `retraining_pool` is **cleared**. The system is now ready to begin collecting the next batch of fresh data for the next retraining cycle.
+-   **Unsupervised Learning**: It does not need "Impostor Data" to train. It learns the boundaries of the legitimate user's behavior.
+-   **Anomaly Detection**: Instead of classifying "User A vs User B," it asks: *"Does this data look like it belongs to the training set?"* If not, it is an anomaly.
+-   **Efficiency**: It creates a forest of random decision trees. Anomalies are isolated quickly (short path lengths), while normal data requires deeper traversal.
 
 ---
-### Visualization
 
-The diagram below illustrates the complete lifecycle of a single user's model.
+### 2. The Specialist Architecture
+
+To solve the problem of "Partial Activity" (e.g., a user who only types but doesn't move the mouse), MaxiDOM trains **two independent models** for every user:
+
+1.  **`model_mouse.joblib`**: Trained exclusively on sessions with significant mouse movement.
+2.  **`model_typing.joblib`**: Trained exclusively on sessions with significant keystroke dynamics.
+
+This allows the system to perform **"Dissect and Score"**: verification is performed on whichever modalities are active, without the inactive modality dragging down the score.
+
+---
+
+### 3. The Lifecycle Phases
+
+#### Phase 1: Profiling (Data Collection)
+
+This is the "Cold Start" phase. The goal is to build a diverse, high-integrity dataset.
+
+-   **Lockdown**: The user is forced to authenticate at the start of every session to ensure data purity.
+-   **Collection**: The backend extracts 15-dimensional feature vectors and stores them in `features.csv`.
+-   **The Diversity Gate**: Training does not start based on a simple count. The `UserModelManager` enforces specific diversity quotas to ensure both specialist models have enough data:
+    *   **Total Samples**: ≥ 300
+    *   **Mouse-Active Samples**: ≥ 150
+    *   **Keyboard-Active Samples**: ≥ 50
+    *   **Digraph Samples**: ≥ 30
+
+#### Phase 2: Specialist Training & Calibration
+
+Once the Diversity Gate is passed, the backend triggers the training job:
+
+1.  **Splitting**: The data is filtered into two subsets: one for Mouse, one for Typing.
+2.  **Fitting**: An `IsolationForest` (`n_estimators=100`, `contamination=0.05`) is fitted to each subset.
+3.  **Dynamic Calibration (The 15th Percentile)**:
+    *   The system scores the training data against itself.
+    *   It calculates the score at the **15th Percentile**.
+    *   **Logic**: *"We define 'Normal' as the top 85% of the user's best behavior."*
+    *   This strict threshold prioritizes security (rejecting impostors) over convenience.
+4.  **Serialization**: The models and their specific thresholds are saved to `model_mouse.joblib` and `model_typing.joblib`.
+
+#### Phase 3: Detection (The "Weakest Link" Logic)
+
+In this active phase, the system scores new data.
+
+1.  **Gating**: The system checks the density of the new session.
+    *   If `key_count < 6`, the Typing Model **Abstains** (returns a safe score).
+    *   If `mouse_count < 30`, the Mouse Model **Abstains**.
+2.  **Scoring**: Valid models calculate an anomaly score.
+3.  **The Verdict**:
+    *   If **Mouse Score < Mouse Threshold**: **ANOMALY**.
+    *   If **Typing Score < Typing Threshold**: **ANOMALY**.
+    *   This enforces a "Weakest Link" policy: An impostor must pass *all* active checks to succeed.
+
+---
+
+### 4. Why No Retraining? (Static Security Policy)
+
+MaxiDOM deliberately **excludes** an automated retraining/feedback loop. This is a strategic security decision.
+
+| Risk                | Explanation                                                                                                                                                            |
+| :------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Model Poisoning** | If the system retrains on data it *thinks* is normal (but is actually a clever impostor), the model learns to accept the attack.                                       |
+| **Concept Drift**   | Users tend to become "lazier" over time. Automated retraining dilutes the strict baseline established during the pristine Profiling phase, increasing False Positives. |
+| **Determinism**     | For forensic and auditing purposes, the security rules must be fixed. A static model guarantees that the same input always produces the same output.                   |
+
+**Defense Narrative:**
+> *"We prioritized **Security Integrity** over adaptive convenience. By locking the model after the verified Profiling phase, we prevent adversarial drift and ensure the security baseline remains uncompromised."*
+
+---
+
+### 5. Lifecycle Diagram
 
 ```mermaid
 graph TD
-    subgraph "Phase 1 & 2: Profiling & Initial Training"
-        A(New User) --> B{Send Data to /train};
-        B --> C[Backend Collects<br>Feature Vectors];
-        C --> D{300 Samples Collected?};
-        D -- "Yes" --> E[Train & Save<br>Initial Model v1.0];
-        D -- "No" --> B;
+    subgraph "Phase 1: Profiling"
+        Data[Incoming Data] --> CSV[(features.csv)]
+        CSV --> Check{Diversity Met? - 300 total, 50 keys, 150 mouse}
+        Check -- "No" --> Wait[Continue Collection]
     end
 
-    subgraph "Phase 3 & 4: Detection, Response & Retraining"
-        F[(Model v1.0)];
-        G{Send Data to /score} --> H[Load Model];
-        H --> I[Score Data];
-        I --> J{"Anomaly?<br>(Score < 0)"};
-        
-        subgraph "Feedback Loop"
-            K([Retraining Pool]);
-            J -- "No (Normal)" --> L[Add Vector to Pool];
-            L --> K;
-        end
-        
-        subgraph "Active Response"
-            J -- "Yes (Anomaly)" --> M[Client Injects<br>Password Prompt];
-        end
+    subgraph "Phase 2: Training"
+        Check -- "Yes" --> Split[Split Data]
+        Split --> TrainM[Train Mouse Model]
+        Split --> TrainK[Train Typing Model]
+        TrainM --> CalibM[Calibrate 15th Percentile]
+        TrainK --> CalibK[Calibrate 15th Percentile]
+        CalibM & CalibK --> Save[(Save Models)]
     end
-    
-    E --> F;
-    F --> H;
-    
-    T{"Retraining Trigger?<br>(500 new samples)"};
-    K --> T;
-    T -- "Yes" --> U[Retrain Model v1.1<br>on Old+New Data];
-    U -- "Replaces" --> F;
+
+    subgraph "Phase 3: Detection"
+        Live[Live Session] --> Gate{Significance Gate}
+        Gate -- "Valid Data" --> Score[Score against Specialists]
+        Score --> Threshold{Score < 15th %?}
+        Threshold -- "Yes" --> Alert[🚨 ANOMALY = Lockdown]
+        Threshold -- "No" --> Pass[✅ Normal]
+    end
 ```

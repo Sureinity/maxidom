@@ -4,96 +4,90 @@
 
 ### 1. Role and Design Philosophy
 
-The backend is the **centralized brain** of the MaxiDOM system. It is designed to handle all complex computations, data processing, and machine learning operations, allowing the frontend client to remain lightweight and efficient.
+The backend is the **Stateless Decision Engine** of the MaxiDOM system. It centralizes all biometric logic, ensuring that the heavy mathematical lifting (Feature Extraction and ML Inference) happens in a controlled, secure environment rather than on the client device.
 
--   **Stateless API**: Each API request is treated as an independent transaction. All necessary state (like the `profile_id`) is provided by the client in the request itself.
--   **Intelligent Server**: It contains all the logic for the model lifecycle, from feature extraction to training, scoring, and periodic retraining.
--   **High Performance**: Built with FastAPI and Uvicorn, it leverages asynchronous capabilities to handle requests efficiently.
+-   **Stateless Processing**: Each request is an independent transaction containing all necessary data (Profile UUID + Behavioral Payload).
+-   **Specialist Orchestration**: It manages the "Dissect and Score" architecture, routing data to specific models based on the activity type.
+-   **High Performance**: Built on **FastAPI** (ASGI) and **Uvicorn**, optimized for concurrent I/O operations.
 
 ### 2. Core Components
 
-The backend codebase is structured into logical modules, each with a distinct responsibility.
+The backend is modularized to separate API concerns from Biometric concerns.
 
-| Component / Module | Role | Key Technologies |
+| Component | File | Responsibility |
 | :--- | :--- | :--- |
-| **API Layer (`main.py`)** | Defines all RESTful API endpoints (`/train`, `/score`). Manages HTTP requests and responses. Uses Pydantic models for automatic request body validation. | FastAPI, Pydantic |
-| **Feature Extractor** | A dedicated module responsible for transforming the aggregated raw JSON payload into a fixed-size, numerical feature vector that can be fed into the ML model. | NumPy, Pandas |
-| **Model Manager** | An abstraction layer that handles all interactions with the machine learning models. It manages loading, saving, training, and predicting. | Scikit-learn (`IsolationForest`) |
-| **Persistence** | The mechanism for storing and retrieving trained models from the file system. Each model is serialized and named after its corresponding `profile_id`. | `joblib` |
+| **API Layer** | `api.py` | Defines endpoints, validates JSON schemas via Pydantic, and handles HTTP responses. |
+| **Feature Engine** | `feature_extraction.py` | Transforms raw JSON into a 15-dimensional vector. **Crucial:** Implements the "Time Travel" fix by deriving duration from event timestamps if the payload metadata is corrupt. |
+| **Model Manager** | `utils.py` | Manages the **Specialist Models**. Handles storage/loading of `.joblib` files, implements **Significance Gating**, and calculates the **Dynamic 15th Percentile Threshold**. |
+| **Auth Manager** | `database.py`, `security.py` | Handles SQLite interactions for user credentials and bcrypt password hashing. |
 
 ### 3. Core Workflows
 
-The backend processes data according to the endpoint that was called.
+#### 3.1. Enrollment (`POST /enroll`)
+A security-critical, one-time flow.
+1.  Receives a plain-text password.
+2.  Hashes it using **bcrypt** (Work Factor 12).
+3.  Stores the hash in `maxidom.db` linked to the `profile_id`.
+4.  **Note:** This endpoint does not trigger ML training; it simply establishes the "Identity Trust Anchor."
 
-#### 3.1. Enrollment Workflow (`POST /enroll/{profile_id}`) 
-This one-time flow securely sets up a new user profile. 
-1. **Request Validation**: An incoming request is received. The `profile_id` and password are extracted. 
-2. **Hashing**: The plain-text password is passed to the **Auth Manager**, which uses a strong, one-way hashing algorithm (bcrypt) to generate a secure password hash. 
-3. **Secure Storage**: The `profile_id` and its corresponding `password_hash` are saved to the credential store (e.g., a `users` table in an SQLite database). **Plain-text passwords are never stored.**
-#### 3.1. Training Workflow (`POST /train/{profile_id}`)
+#### 3.2. Profiling & Training (`POST /train`)
+The system follows a **"Collect, Diversify, Train"** strategy.
 
-This flow is executed during the initial profiling phase for a new user. The system follows an **"Extract, Store, Train"** model to distribute the computational load and optimize storage.
+1.  **Ingestion**: Receives raw behavioral data.
+2.  **Extraction**: Converts data to a 15-dim feature vector immediately (saving storage space).
+3.  **Diversity Check**: The Model Manager analyzes the accumulated CSV data. It checks if there are enough samples for *both* modalities:
+    *   Total Samples > 300
+    *   Keyboard-heavy Samples > 50
+    *   Mouse-heavy Samples > 150
+4.  **Training Trigger**: Once diversity is met, a Background Task initiates training.
+    *   It splits the data into "Mouse" and "Typing" subsets.
+    *   It trains two separate **Isolation Forest** models.
+    *   It calibrates the **15th Percentile Threshold** for each model independently.
 
-1.  **Request Validation**: An incoming request to `/train` is received. FastAPI uses Pydantic to automatically validate the JSON body against the predefined schema.
-2.  **Immediate Feature Extraction**: The valid JSON payload is immediately passed to the **Feature Extractor**, which calculates all statistical features and returns a single numerical feature vector.
-3.  **Efficient Storage**: This compact feature vector is appended as a new row to a lightweight data store (e.g., a user-specific CSV file).
-4. **Model Training Trigger**: After a predefined number of vectors are collected, the **Model Manager** is triggered as a background task to train and save the initial `IsolationForest` model.
+#### 3.3. Scoring (The "Dissect & Score" Logic) (`POST /score`)
+This is the heart of the detection engine.
 
-> **Design Choice: Why Extract Features Immediately?**
->
-> An alternative approach would be to store the raw JSON payloads first and then perform feature extraction on the entire batch just before training. We deliberately chose to extract features on-the-fly for two key reasons:
->
-> -   **Distributed Workload**: The computational cost of feature extraction is spread across hundreds of small, fast API calls instead of creating one massive performance spike during the training job. This keeps the server responsive.
-> -   **Storage Efficiency**: A numerical feature vector is significantly smaller than its raw JSON source. This approach minimizes disk space usage in the training data pool.
->
-> The trade-off is reduced flexibility during development (you cannot "re-extract" features from stored data), but the gains in performance and efficiency are critical for a production-ready system.
+1.  **Validation**: API receives payload and counts raw events (`key_count`, `mouse_count`).
+2.  **Dissection**: Feature Extractor produces a unified vector.
+3.  **Gating**: The Model Manager applies **Significance Gating**:
+    *   If `key_count < 6`: The Typing Model **Abstains** (returns a safe score).
+    *   If `mouse_count < 30`: The Mouse Model **Abstains**.
+4.  **Inference**:
+    *   Valid models run `decision_function()`.
+    *   Scores are compared against their specific thresholds.
+5.  **Aggregated Decision**:
+    *   If **ANY** valid model votes "Anomaly" (Score < Threshold), the session is flagged.
+    *   `is_anomaly: true` is returned to the client.
 
-#### 3.3. Scoring & Retraining Workflow (`POST /score/{profile_id}`)
+### 4. Visualization
 
-This is the standard operational flow for an active user.
-
-### 1. Scoring (`POST /score/{profile_id}`)
-
-- The backend receives the behavioral data, validates it, and checks if a model exists for the `profile_id`.
-- Features are extracted, and the user's model is loaded to score the vector.
-- The response (`{"is_anomaly": true/false, ...}`) is returned to the client.
-- If the behavior is **not anomalous**, the feature vector is added to the `retraining_pool` as part of the feedback loop.
-
-### 2. Verification (`POST /verify_password/{profile_id}`)
-
-- This endpoint is called by the client **only after** an anomaly has been detected.
-- The backend receives the plain-text password attempt.
-- The **Auth & Password Manager** retrieves the user's stored `password_hash` from persistence.
-- It uses a secure, time-constant comparison function (`passlib.verify`) to check if the provided password matches the hash.
-- The verification result (`{"verified": true/false}`) is returned to the client.
-
----
-
-### 3. Visualization
-
-The following diagram illustrates the internal data flow for the main operational endpoints:
+The following diagram illustrates the internal processing pipeline for a Scoring Request.
 
 ```mermaid
 graph TD
-    A[Client Request] --> B{API Layer (FastAPI)};
+    Request[Client JSON Payload] --> API[api.py]
     
     subgraph "Backend Logic"
-        B -- "/enroll, /verify" --> C[Auth & Password Manager];
-        B -- "/train, /score" --> D[Feature Extraction Engine];
+        API -- "Raw Data" --> Extractor[Feature Extractor]
+        Extractor -- "Fixes Time Travel" --> Vector[15-Dim Vector]
         
-        D -- "Numerical Vector" --> E[Model Manager];
+        API -- "Counts Events" --> Gate[Significance Gate]
         
-        subgraph "Persistence"
-            direction LR
-            F[(User Credentials<br>Hashed Passwords)]
-            G[(Trained Models<br>./models/)]
-        end
-
-        C -- "Saves/Loads Hash" --> F;
-        E -- "Saves/Loads Model" --> G;
+        Vector --> ModelMgr[Model Manager]
+        Gate --> ModelMgr
+        
+        ModelMgr -- "Mouse Features" --> MouseModel{Count > 30?}
+        ModelMgr -- "Typing Features" --> TypeModel{Count > 6?}
+        
+        MouseModel -- "Yes" --> ScorerM[Score vs 15th Percentile]
+        MouseModel -- "No" --> SafeM[Abstain]
+        
+        TypeModel -- "Yes" --> ScorerT[Score vs 15th Percentile]
+        TypeModel -- "No" --> SafeT[Abstain]
     end
     
-    C --> H[API Response];
-    E --> H;
-
-    style A fill:#d6eaff,stroke:#333
+    ScorerM & SafeM --> Decision[Weakest Link Logic]
+    ScorerT & SafeT --> Decision
+    
+    Decision --> Response{"is_anomaly: boolean"}
+```

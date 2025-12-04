@@ -18,7 +18,7 @@ MaxiDOM is designed to close this gap by continuously verifying the user's ident
 
 MaxiDOM introduces a layer of security that works passively in the background. It verifies identity not by asking for credentials, but by observing the subconscious patterns of user interaction with the browser.
 
-The system builds a unique biometric "signature" for a user and flags any significant deviation from this signature as a potential anomaly. When an anomaly is detected, the system can issue an **active challenge**—such as a password prompt—to confirm the user's identity and provide real-time defense against impersonation.
+The system builds a unique biometric "signature" for a user and flags any significant deviation from this signature as a potential anomaly. When an anomaly is detected, the system issues an **active challenge**—a password prompt overlay—to confirm the user's identity and provide real-time defense against impersonation.
 
 ### 3. Core Principles
 
@@ -28,30 +28,30 @@ The system is built on three core design principles:
 
 MaxiDOM intentionally ignores the *content* of web pages (`what` the user is doing) and focuses exclusively on the *mechanics* of their interaction (`how` they are doing it).
 
--   **Benefit**: This creates a generalized, robust behavioral profile that is consistent across different websites. It also enhances privacy by not tracking browsing history or specific site interactions.
+-   **Benefit**: This creates a generalized, robust behavioral profile that is consistent across different websites (e.g., Wikipedia vs. YouTube). It also enhances privacy by not tracking browsing history or specific site interactions.
 -   **Implementation**: Data is collected from all tabs and windows, making the profile a holistic representation of the user's overall browser usage style.
 
-#### 3.2. Multi-Modal Biometrics
+#### 3.2. "Dissect and Score" Specialist Architecture
 
-A user's signature is composed of several distinct behavioral patterns, captured via standard DOM APIs:
+Unlike traditional systems that average all behavior into a single score, MaxiDOM uses a **Multi-Modal Specialist Approach**.
 
--   **Mouse Dynamics**: Speed, acceleration, path curvature, click duration, and drag-and-drop behavior.
--   **Keystroke Dynamics**: Typing rhythm, including key press duration (dwell time) and time between presses (flight time).
--   **Scrolling Dynamics**: The speed, frequency, and rhythm of scrolling actions.
--   **Window/Tab Interaction**: Patterns of switching between tabs and resizing the browser window.
+-   **Mouse Specialist**: Analyzes motor control, speed, acceleration, and curvature.
+-   **Typing Specialist**: Analyzes rhythm, flight time between keys, and dwell time.
+-   **The Logic**: A session is analyzed by "dissecting" it into mouse and keyboard components. Each component is scored by its respective specialist model. If **either** model detects an anomaly (e.g., the user types correctly but uses the mouse with the wrong hand), the session is flagged. This "Weakest Link" security policy significantly reduces False Acceptance rates.
 
-#### 3.3. Personalized Anomaly Detection
+#### 3.3. Static Security Integrity
 
-Each browser profile is protected by its own dedicated machine learning model.
+To prevent **"Model Poisoning"** (where an attacker slowly trains the system to accept their behavior), MaxiDOM enforces a **Static Model Lifecycle**.
 
--   **Algorithm**: The system uses the **Isolation Forest** algorithm, which is highly effective for anomaly detection. It excels at identifying "different" data points without needing examples of impersonator behavior during training.
--   **Model Scope**: A model trained on one user's data will only be used to score that same user's subsequent activity, ensuring a truly personalized security baseline.
+-   **Pristine Enrollment**: Models are trained *once* on a verified, high-integrity dataset collected during a locked-down enrollment phase.
+-   **Deterministic Rules**: The system does not "learn" from unverified sessions. This guarantees that the security baseline never drifts or degrades over time, ensuring a reproducible and defensible security posture.
 
 ### 4. System Workflow
 
-MaxiDOM operates in a continuous lifecycle:
+MaxiDOM operates in a clear, three-phase lifecycle:
 
-1.  **Enrollment & Profiling (Cold Start)**: When first installed, the user enrolls by setting a verification password. The extension then enters a data collection phase to gather enough baseline data to build an initial, reliable profile.
-2.  **Training**: The backend uses the collected data to train the initial `Isolation Forest` model for that user's UUID.
-3.  **Detection**: Once a model is active, all new behavioral data is scored against it in near real-time. If the data is flagged as an anomaly, the system triggers a **step-up authentication challenge** by prompting the user for their password via an overlay.
-4.  **Feedback Loop (Retraining)**: To adapt to natural, gradual changes in a user's behavior over time, the model is periodically retrained with new, validated data.
+1.  **Enrollment & Lockdown**: When first installed, the user sets a verification password. The browser enters a "Lockdown" state where profiling data is only collected if the user authenticates at the start of the session.
+2.  **Profiling (Training)**: The backend collects a specific quota of behavioral data (300 valid samples). Once diversity requirements are met, it trains two `Isolation Forest` specialist models (Mouse and Typing).
+3.  **Detection & Protection**: The system switches to "Active Mode." All new behavior is scored against the static baseline.
+    *   **Normal Behavior**: User continues uninterrupted.
+    *   **Anomaly Detected**: The system immediately locks the interface and demands the verification password.

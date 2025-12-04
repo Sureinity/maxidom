@@ -1,100 +1,104 @@
 # 05. Data Schema & Feature Specification
 
-This document details the complete data pipeline for the MaxiDOM system, from the raw browser events captured by the client to the final numerical feature vector used by the machine learning model on the backend.
+This document details the complete data pipeline for the MaxiDOM system. The pipeline transforms raw, noisy browser events into a precise, hardened biometric signature used for anomaly detection.
 
 The data progresses through three distinct stages:
-1.  **Raw Events**: Granular interaction data captured in real-time.
-2.  **Aggregated Payload**: A structured JSON object sent from the client to the server.
-3.  **Extracted Features**: The final numerical representation used for model training and scoring.
+1.  **Raw Events**: Granular interaction data captured by the content script.
+2.  **Aggregated Payload**: A structured JSON object sent to the API (defined in `models.py`).
+3.  **Extracted Features**: The final 15-dimensional vector used by the Specialist Models.
 
 ---
 
 ### 1. Raw DOM Events (Client-Side Capture)
 
-This is the raw data collected by the `content.js` script, listening directly to the browser's DOM.
+This is the raw data collected by `content.js`. We intentionally stripped high-variance inputs (scrolling, window resizing) to focus on subconscious motor skills.
 
 | DOM Event | Properties Captured | Purpose |
 | :--- | :--- | :--- |
-| **`mousemove`** | `timeStamp`, `clientX`, `clientY` | Tracks the path and timing of all mouse movements. |
-| **`mousedown`** | `timeStamp`, `clientX`, `clientY`, `button` | Marks the start of a click or drag operation. |
-| **`mouseup`** | `timeStamp`, `clientX`, `clientY`, `button` | Marks the end of a click or drag operation. |
-| **`keydown`** | `timeStamp`, `code` | Marks the moment a physical key is pressed down. |
-| **`keyup`** | `timeStamp`, `code` | Marks the moment a physical key is released. |
-| **`wheel`** | `timeStamp`, `deltaY` | Captures vertical scroll actions and their magnitude. |
-| **`window.focus`** | `timeStamp` | Records when the user switches back to the tab. |
-| **`window.blur`** | `timeStamp` | Records when the user switches away from the tab. |
-
-> **Privacy Note**: We capture `event.code` (e.g., `KeyA`, `ShiftLeft`) instead of `event.key` (`a`, `A`). This provides the necessary data for rhythm analysis without recording the actual sensitive characters being typed.
+| **`mousemove`** | `timeStamp`, `clientX`, `clientY` | Tracks the path and velocity of pointer movement. |
+| **`mousedown`** | `timeStamp`, `clientX`, `clientY`, `button` | Marks the start of a click interaction. |
+| **`mouseup`** | `timeStamp`, `clientX`, `clientY`, `button` | Marks the end of a click interaction (used for Duration). |
+| **`keydown`** | `timeStamp`, `code` | Marks the start of a key press. We capture `code` (physical key location) not `key` (character) for privacy and consistency. |
+| **`keyup`** | `timeStamp`, `code` | Marks the release of a key (used for Dwell Time). |
 
 ---
 
-### 2. Aggregated Data Payload (API Contract)
+### 2. Aggregated Data Payload (API Input)
 
-The `background.js` script aggregates the raw events into a structured, efficient JSON payload before sending it to the backend. This is the data format defined by the API contract.
+The `service-worker.js` aggregates raw events into "sessions" based on inactivity (5s timeout).
 
 ```json
 {
-  "startTimestamp": 1678890000000,
-  "endTimestamp": 1678890120000,
-  "windowSize": { "width": 1920, "height": 1080 },
+  "startTimestamp": 1715000000.0,
+  "endTimestamp": 1715000015.0,
 
   // Paired key-down and key-up events
   "keyEvents": [
-    { "code": "KeyH", "downTime": 1678890005100, "upTime": 1678890005185 },
-    { "code": "KeyE", "downTime": 1678890005250, "upTime": 1678890005340 }
+    { "code": "KeyH", "downTime": 1715000005.100, "upTime": 1715000005.185 },
+    { "code": "KeyE", "downTime": 1715000005.250, "upTime": 1715000005.340 }
   ],
 
-  // A list of continuous mouse movements between two pauses
+  // A list of continuous mouse movements (strokes)
   "mousePaths": [
     [
-      { "t": 1678890010500, "x": 850, "y": 420 },
-      { "t": 1678890010520, "x": 855, "y": 425 }
+      { "t": 1715000010.500, "x": 850, "y": 420 },
+      { "t": 1715000010.520, "x": 855, "y": 425 }
     ]
   ],
 
-  // Processed click events with pre-calculated duration
+  // Processed clicks
   "clicks": [
-    { "t": 1678890015300, "x": 1500, "y": 250, "button": 0, "duration": 125 }
-  ],
-
-  // A simple list of scroll actions
-  "scrollEvents": [
-    { "t": 1678890020100, "dy": 100 },
-    { "t": 1678890020150, "dy": 120 }
-  ],
-
-  // A record of focus changes
-  "focusChanges": [
-    { "type": "blur", "t": 1678890030000 },
-    { "type": "focus", "t": 1678890035000 }
+    { "t": 1715000015.300, "x": 1500, "y": 250, "button": 0, "duration": 125.0 }
   ]
 }
 ```
 
-### 3. Final Extracted Features (ML Model Input)
+> **The Time Travel Fix:** Due to Chrome Service Worker sleep cycles, `performance.now()` may drift or reset, causing `endTimestamp` to be less than `startTimestamp`. The Backend automatically detects this and calculates a **Derived Duration** (`max(events) - min(events)`) to ensure accurate speed calculations.
 
-The backend's Feature Extraction Engine processes the aggregated payload and produces the following fixed-size numerical vector. This vector is the direct input for the `IsolationForest` model.
+---
 
-| Feature name                          | Description & Purpose                                                                                                                                                       | Derived From (Aggregated Data)                                                                |
-| :------------------------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------- |
-| **🖱️ Mouse Dynamics**                |                                                                                                                                                                             |                                                                                               |
-| `avg_mouse_speed`                     | The average speed of the mouse pointer when in motion. A fundamental indicator of a user's general pace and motor control.                                                  | Each array within `mousePaths`.                                                               |
-| `std_mouse_speed`                     | The standard deviation of mouse speed. Measures the consistency of the user's movement speed, distinguishing smooth operators from erratic ones.                            | Each array within `mousePaths`.                                                               |
-| `avg_mouse_acceleration`              | The average rate of change of mouse speed. A key biometric indicating how smoothly a user initiates and terminates movements.                                               | Calculated from speed changes within each path in `mousePaths`.                               |
-| `std_mouse_acceleration`              | The standard deviation of acceleration, often called "jerk." Measures the smoothness or jerkiness of movement, which is very hard to impersonate.                           | Calculated from speed changes within each path in `mousePaths`.                               |
-| `path_straightness`                   | The ratio of the straight-line distance to the actual distance traveled. Captures the unique curvature of a user's hand movements.                                          | Each array within `mousePaths`.                                                               |
-| `avg_click_duration`                  | The average time a mouse button is held down (`mousedown` to `mouseup`). A pure and powerful neuromuscular signature.                                                       | The `duration` property in the `clicks` array.                                                |
-| `double_click_rate`                   | The frequency of double-clicks (two clicks in rapid succession). Captures a specific, ingrained user habit.                                                                 | The `t` property in the `clicks` array.                                                       |
-| **⌨️ Keystroke Dynamics**             |                                                                                                                                                                             |                                                                                               |
-| `avg_dwell_time`                      | The average duration a key is physically held down (`keydown` to `keyup`). A core feature of keystroke dynamics that is highly user-specific.                               | The `downTime` and `upTime` properties in the `keyEvents` array.                              |
-| `std_dwell_time`                      | The standard deviation of dwell time. Measures the consistency of a user's key presses.                                                                                     | The `downTime` and `upTime` properties in the `keyEvents` array.                              |
-| `avg_flight_time_digraph`             | The average time between key presses for common letter pairs (e.g., 'th', 'er', 'in'). More stable and descriptive than a general "any-key" flight time.                    | `downTime` of consecutive items in the `keyEvents` array, filtered for specific `code` pairs. |
-| `std_flight_time_digraph`             | The standard deviation of digraph flight times. Measures the consistency of a user's typing rhythm for common words and letter combinations.                                | `downTime` of consecutive items in the `keyEvents` array, filtered for specific `code` pairs. |
-| **📜 Scrolling Dynamics**             |                                                                                                                                                                             |                                                                                               |
-| `avg_scroll_magnitude`                | The average vertical distance (`deltaY`) of a single scroll action. Differentiates users who make large "flicks" from those who make small, precise scrolls.                | The `dy` property in the `scrollEvents` array.                                                |
-| `scroll_burstiness`                   | The standard deviation of the time between consecutive scroll events. Captures the user's scrolling rhythm (continuous and smooth vs. discrete and bursty).                 | The `t` property in the `scrollEvents` array.                                                 |
-| `avg_time_between_scrolls`            | The average time between two consecutive scroll events. Complements burstiness by measuring the user's typical pause/cadence during scrolling.                              | The `t` property in the `scrollEvents` array.                                                 |
-| `scroll_direction_ratio`              | The ratio of downward scrolls (positive `deltaY`) to the total number of scroll events. A simple but effective feature for capturing dominant scrolling habits.             | The sign of the `dy` property in the `scrollEvents` array.                                    |
-| **🖥️ Session & Habitual Dynamics**   |                                                                                                                                                                             |                                                                                               |
-| `window_focus_blur_rate`              | The number of times the user switches tabs or applications per minute. Measures a user's tendency for multitasking or distraction.                                          | The `focusChanges` array, normalized by session duration.                                     |
-| `mouse_movement_to_interaction_ratio` | The ratio of total mouse path distance to the number of clicks and keystrokes. A novel feature to capture users who "think with their mouse" vs. those who are more direct. | `mousePaths`, `clicks`, and `keyEvents` arrays.                                               |
+### 3. Feature Engineering (The "Hardened 15")
+
+The backend extracts exactly 15 features. These features were selected based on the **Subconscious Origin Principle**: they measure *how* a user moves, which is harder to spoof than *what* they do.
+
+These features are split between the two **Specialist Models**.
+
+#### 3.1. Mouse Specialist Features (11 Dimensions)
+
+These features analyze fine motor control and hand-eye coordination.
+
+| Feature Name | Description |
+| :--- | :--- |
+| `avg_mouse_speed` | The average velocity of the cursor. |
+| `std_mouse_speed` | Consistency of speed. Distinguishes "jerky" vs. "smooth" movers. |
+| `avg_mouse_acceleration` | Rate of speed change. Measures initiation/termination of movement. |
+| `std_mouse_acceleration` | Variation in acceleration (Jerk). High signal for motor control. |
+| `path_straightness` | Ratio of direct distance to actual path distance. Captures curvature/efficiency. |
+| `avg_click_duration` | Time between `mousedown` and `mouseup`. Highly subconscious. |
+| `avg_pause_duration` | Average time the mouse is stationary between movements. |
+| `pause_frequency` | How often the user stops moving the mouse per second. |
+| `avg_turn_angle` | The average angle of direction changes within a movement path. |
+| `avg_stroke_velocity` | Speed calculated over an entire stroke (start to stop). |
+| `mouse_after_typing_latency` | **(Transitional)** Time taken to move the mouse immediately after typing. Measures the "Context Switch" reflex. |
+
+#### 3.2. Typing Specialist Features (4 Dimensions)
+
+These features analyze neuromuscular rhythm and typing gait.
+
+| Feature Name | Description |
+| :--- | :--- |
+| `avg_dwell_time_alpha` | Average time a key is held down. **Filtered to A-Z keys only** to remove outlier behavior from special keys (Shift, Ctrl). |
+| `avg_flight_time_digraph` | Time between releasing one key and pressing the next. **Filtered to common English digraphs** (e.g., 'th', 'he', 'an') to ensure high-frequency, subconscious data. |
+| `std_flight_time_digraph` | The consistency (rhythm) of the flight time. |
+| `typing_speed_kps` | Keys per second. A basic but effective baseline metric. |
+
+---
+
+### 4. Significance Gating
+
+To prevent False Positives from sparse data (e.g., user presses 1 key), the extraction pipeline includes **Data Density Counters**.
+
+-   **Mouse Count**: Total number of coordinate points in `mousePaths`.
+-   **Key Count**: Total number of objects in `keyEvents`.
+
+The Scoring Engine uses these counts to decide whether to activate a Specialist Model or force it to "Abstain" (return a neutral score).

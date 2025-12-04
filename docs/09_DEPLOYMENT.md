@@ -1,102 +1,67 @@
-# 09. Deployment
+# 09. Deployment Strategy
 
-This guide outlines the steps required to deploy the MaxiDOM system into a production or production-like environment. It covers packaging the frontend extension and running the backend with a production-grade server.
+This document outlines the deployment architecture for MaxiDOM. It distinguishes between the **Component Deployment** (running the code) and the **Enterprise Policy Deployment** (forcing the extension onto devices).
 
 ---
 
-### 1. Frontend Deployment: Packaging the Chrome Extension
+### 1. Backend Deployment (The Server)
 
-In a production scenario, you distribute the extension as a single, installable `.crx` file, not as an unpacked folder.
+The backend is designed to run as a persistent service on the target machine (Self-Hosted) or a central server.
 
-#### 1.1. Creating the Package
+#### 1.1. Production WSGI/ASGI Setup
+For production, we do not use the development reloader. We use **Gunicorn** (Linux) or a direct **Uvicorn** worker (Windows) managed by a supervisor.
 
-1.  Open Google Chrome and navigate to the Extensions page: `chrome://extensions`.
-2.  Ensure **Developer mode** is enabled.
-3.  Click the **Pack extension** button.
-4.  In the "Extension root directory" field, browse and select the `frontend/` folder of the project.
-5.  Leave the "Private key file" field blank for the first time you pack it.
-6.  Click **Pack extension**.
+**Command:**
+```bash
+# Workers = 4 processes for concurrency
+gunicorn -w 4 -k uvicorn.workers.UvicornWorker api:app --bind 0.0.0.0:8000
+```
 
-Chrome will generate two files in the directory *above* your `frontend` folder:
--   `frontend.crx`: The packaged extension file that you can distribute.
--   `frontend.pem`: **This is your private key.** Keep it safe! You will need this key to pack future updates to your extension. If you lose it, you cannot update the extension with the same ID.
+#### 1.2. Windows Self-Hosting (Background Service)
+For the specific use case of protecting a local Windows machine, the backend is deployed as a **Hidden Background Task** using the Windows Startup folder.
 
-#### 1.2. Installation for End-Users
+**Implementation Details:**
+1.  **Virtual Environment**: A dedicated `.venv` is created to isolate dependencies.
+2.  **VBScript Wrapper**: A `.vbs` script is used to launch the batch file with `WindowStyle 0` (Hidden) to prevent console popups.
+3.  **Persistence**: A shortcut to the wrapper is placed in `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`.
 
-To install the packaged extension, a user can simply **drag and drop the `frontend.crx` file** onto their Chrome Extensions page (`chrome://extensions`).
+---
 
-### 2. Backend Deployment: Running the FastAPI Server
+### 2. Frontend Deployment (The Extension)
 
-The development server (`uvicorn main:app --reload`) is not suitable for production. You must use a production-grade ASGI process manager like Gunicorn to handle concurrent requests robustly.
+In a production/enterprise environment, users do not manually install security tools. The extension is **packaged** and **force-installed** via Group Policy.
 
-#### 2.1. Running with Gunicorn
+#### 2.1. Packaging
+1.  **Packing**: The developer packs the `frontend/` folder using Chrome's "Pack Extension" utility.
+2.  **Signing**: This generates a private key (`.pem`) and the installer (`.crx`).
+3.  **Update Manifest**: An `update.xml` file is generated to map the Extension ID to the `.crx` file URL.
 
-Gunicorn acts as a process manager for Uvicorn workers, enabling you to run multiple concurrent processes to handle traffic.
+#### 2.2. Enterprise Policy Enforcement (Windows)
+To prevent users from disabling the security system, MaxiDOM utilizes the Windows Registry to set the **`ExtensionInstallForcelist`** policy.
 
-1.  **Install Gunicorn**:
-    ```bash
-    # Ensure your virtual environment is activated
-    uv pip install gunicorn
-    ```
+**Target**: `HKEY_LOCAL_MACHINE` (HKLM)
+*Reason*: Writing to HKLM requires Administrator privileges, which signals to Chrome that the policy is a "Device Mandate" rather than a user preference.
 
-2.  **Run the Server**:
-    -   Use the following command to start the application.
+**Registry Script (PowerShell):**
+```powershell
+$policyPath = "HKLM:\Software\Policies\Google\Chrome\ExtensionInstallForcelist"
+# "1" = "EXTENSION_ID;UPDATE_XML_URL"
+Set-ItemProperty -Path $policyPath -Name "1" -Value "abcdef...;http://localhost:8000/static/update.xml"
+```
 
-    ```bash
-    gunicorn -w 4 -k uvicorn.workers.UvicornWorker main:app
-    ```
+---
 
-    -   **`-w 4`**: Specifies the number of worker processes. A good starting point is `2 * (number of CPU cores) + 1`. `4` is a reasonable default.
-    -   **`-k uvicorn.workers.UvicornWorker`**: Tells Gunicorn to use Uvicorn's worker class, which is necessary for running an ASGI application like FastAPI.
-    -   **`main:app`**: Points to the `app` instance inside the `main.py` file.
+### 3. Deployment Limitations & Security Context
 
-#### 2.2. Containerizing with Docker (Recommended)
+**Crucial Note for Defense:**
 
-For consistency and portability, the recommended deployment method is to containerize the backend using Docker.
+While the HKLM Registry strategy is the industry standard for Enterprise Deployment, Google Chrome enforces specific restrictions on **Consumer Windows Editions** (Home/Pro not joined to an Active Directory Domain).
 
-1.  **Create a `Dockerfile`** in the `backend/` directory:
+| Environment            | Behavior                                  | Result                                                                                                       |
+| :--------------------- | :---------------------------------------- | :----------------------------------------------------------------------------------------------------------- |
+| **Linux / Mac**        | Root access is the ultimate trust anchor. | **Success.** Policy is applied, extension is force-installed.                                                |
+| **Windows Enterprise** | Domain Controller is the trust anchor.    | **Success.** Policy is applied via Group Policy Object (GPO).                                                |
+| **Windows Consumer**   | No central trust anchor.                  | **Blocked.** Chrome ignores local HKLM force-install policies from custom URLs to prevent malware hijacking. |
 
-    ```Dockerfile
-    # Use an official Python runtime as a parent image
-    FROM python:3.11-slim
-
-    # Set the working directory in the container
-    WORKDIR /app
-
-    # Install uv package manager
-    RUN pip install uv
-
-    # Copy the dependencies file to the container
-    COPY requirements.txt .
-
-    # Install dependencies using uv
-    RUN uv pip install --no-cache-dir --system -r requirements.txt
-
-    # Copy the rest of the application source code
-    COPY . .
-
-    # Expose the port the app runs on
-    EXPOSE 8000
-
-    # Define the command to run the application
-    # This will be run when the container starts
-    CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000", "main:app"]
-    ```
-
-2.  **Build the Docker Image**:
-    ```bash
-    # From the backend/ directory
-    docker build -t maxidom-backend .
-    ```
-
-3.  **Run the Docker Container**:
-    ```bash
-    # This command maps port 8000 on the host to port 8000 in the container
-    docker run -d -p 8000:8000 --name maxidom-api maxidom-backend
-    ```
-    The backend is now running inside a detached container.
-
-### 3. Production Configuration
-
--   **API URL**: The URL in the Chrome Extension's `background.js` must be updated from `http://127.0.0.1:8000` to the public domain or IP address of your deployed backend server.
--   **HTTPS**: In a true production environment, the backend server should be placed behind a reverse proxy (like Nginx) to handle HTTPS (SSL/TLS) termination, load balancing, and serving static files.
+**Mitigation for Capstone Demo:**
+If demonstrating on a personal (non-domain) Windows laptop, the Extension Policy will show as "Ignored" in `chrome://policy`. This is **expected behavior** for a secure browser. For the purpose of the demo, the extension is loaded manually via "Developer Mode," which functionally replicates the technical architecture of the installed system.
