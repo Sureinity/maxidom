@@ -4,101 +4,93 @@
 
 ### 1. Architectural Model
 
-MaxiDOM is built on a **Client-Server** architecture. This model cleanly separates the responsibilities of data collection (client) from data processing and machine learning (server).
+MaxiDOM is built on a decoupled **Client-Server** architecture. This separation ensures that complex biometric processing is isolated from the browser environment, maintaining performance and security.
 
--   **Client (Frontend)**: A lightweight **Chrome Extension** that acts as a distributed sensor, deployed on the end-user's browser.
--   **Server (Backend)**: A centralized **FastAPI Application** that serves as the system's brain, handling all computation and state management.
+-   **Client (Frontend)**: A **Chrome Extension** (Manifest V3) acting as an intelligent sensor and enforcement agent.
+-   **Server (Backend)**: A **FastAPI** application acting as the biometric decision engine.
 
 ### 2. Component Breakdown
 
-#### 2.1. Chrome Extension (The Sensor & Responder)
+#### 2.1. Chrome Extension (The Sensor & Enforcer)
 
-The extension is responsible for capturing user behavior and responding to backend commands. Its duties include:
+The extension is responsible for capturing micro-behaviors and enforcing security protocols.
 
--   **Data Collection**: Using DOM event listeners (`mousemove`, `keydown`, `wheel`, etc.) to capture raw interaction data.
--   **Data Aggregation**: Structuring raw events into a clean, aggregated JSON payload.
--   **Session Management**: Transmitting data to the backend every 30 seconds of activity.
--   **Secure Communication**: Sending payloads via HTTPS POST requests to the backend API.
--   **Active Response**: When an anomaly is detected, the extension is responsible for **injecting an overlay** to prompt the user for their password and sending the input to the backend for verification.
+-   **Hybrid Data Collector**: Uses a sophisticated "Event-Driven + Inactivity" logic. Data is batched and sent only when a "session" completes (defined by 5 seconds of inactivity, 90 seconds max duration, or 2000 events).
+-   **Noise Filtering**: The frontend discards sessions with fewer than 20 events locally, preventing network congestion and server noise.
+-   **Lockdown Enforcer**: Utilizes `chrome.storage.local` to persist authentication state. On browser startup, it defaults to "Locked" and injects a blocking overlay until the user authenticates.
+-   **Active Responder**: Listens for anomaly flags from the backend and triggers the **Step-Up Authentication** (password prompt) flow.
 
-#### 2.2. FastAPI Backend (The Brain)
+#### 2.2. FastAPI Backend (The Decision Engine)
 
-The backend handles all the heavy lifting, ensuring the client remains lightweight. Its responsibilities include:
+The backend handles the mathematical heavy lifting and "Dissect and Score" logic.
 
--   **API Endpoints**: Providing clear RESTful endpoints for receiving data (`/score`, `/train`) and handling active verification (`/verify_password`).
--   **User Identity Management**: Associating incoming data with a specific user profile via a unique `UUID`.
--   **Secure Credential Storage**: Hashing and storing user passwords securely using a strong algorithm like bcrypt.
--   **Feature Extraction**: Parsing the aggregated JSON payload and converting it into a numerical feature vector.
--   **Model Lifecycle Management**:
-    -   **Training**: Orchestrating the training of new `Isolation Forest` models.
-    -   **Scoring**: Loading the appropriate user model and using it to score new data.
-    -   **Retraining**: Implementing the logic for the periodic retraining feedback loop.
--   **Persistence**: Saving and loading trained models from the file system.
+-   **Specialist Orchestrator**: Unlike traditional systems that use a single model, the backend manages two distinct `IsolationForest` models per user:
+    1.  **Mouse Specialist**: Analyzes motor control and path dynamics.
+    2.  **Typing Specialist**: Analyzes rhythm and digraph flight times.
+-   **Significance Gating**: Before scoring, the backend checks data density. If a session has insufficient data for a specific modality (e.g., < 6 keystrokes), that specific model "abstains" from voting to prevent false positives.
+-   **Static Security Lifecycle**: The backend enforces a "Train Once, Protect Forever" policy. It refuses to update models based on unverified detection data to prevent "Adversarial Model Poisoning."
 
 ### 3. Data Flow
 
-The system follows two primary data flows: **Profiling/Training** and **Detection**.
+The system follows two distinct operational flows based on the user's lifecycle state.
 
-#### 3.1. Profiling & Training Flow
+#### 3.1. Enrollment & Profiling Flow (The "Pristine" Phase)
 
-1.  A new user enrolls by setting a password and generates a `UUID`.
-2.  The **Chrome Extension** collects and aggregates behavioral data.
-3.  The extension sends the data to a training-specific endpoint (e.g., `/train`).
-4.  The **Backend** receives the data, performs feature extraction, and stores the feature vectors.
-5.  Once enough data is collected, the backend trains a new `Isolation Forest` model.
-6.  The trained model is serialized and saved to disk.
-7.  The user's state is switched from "profiling" to "detection."
+1.  **Lockdown**: The user opens the browser. The extension blocks access (`overlayState = true`) until the user enters their password.
+2.  **Collection**: Once unlocked, the extension captures high-fidelity behavioral data.
+3.  **Transmission**: Data is sent to `POST /api/train/{uuid}`.
+4.  **Vectorization**: The backend extracts a 15-dimensional feature vector.
+5.  **Diversity Check**: The backend monitors the "Diversity Pool" (total samples, mouse-heavy samples, keyboard-heavy samples).
+6.  **Training**: Once thresholds (300 samples) are met, the backend trains the two Specialist Models and saves them to disk. The system state advances to "Detection."
 
-#### 3.2. Detection & Verification Flow
+#### 3.2. Detection & Verification Flow (The "Active" Phase)
 
-1.  An existing user interacts with their browser.
-2.  The **Chrome Extension** sends the data payload to the detection endpoint (`/score`).
-3.  The **Backend** scores the data.
-4.  **If the behavior is normal**, the backend saves the data to the retraining pool (this is the feedback loop) and sends a normal response.
-5.  **If the behavior is an anomaly**, the backend returns `{"is_anomaly": true}`.
-6.  The **Chrome Extension** receives the anomaly flag and injects a password prompt overlay.
-7.  The user enters their password. The extension sends it to the `POST /verify_password` endpoint.
-8.  The **Backend** verifies the password against the stored hash and returns `{"verified": true/false}`.
-9.  The **Chrome Extension** removes the overlay on success or shows an error on failure.
+1.  **Activity**: The user interacts with a webpage.
+2.  **Dissection**: The extension sends the payload to `POST /api/score/{uuid}`. The backend dissects the payload into mouse and keyboard components.
+3.  **Gating & Scoring**:
+    *   **Typing Model**: Scores only if `key_count >= 6`.
+    *   **Mouse Model**: Scores only if `mouse_points >= 30`.
+4.  **The "Weakest Link" Decision**:
+    *   If **EITHER** active model returns a score below the 15th percentile threshold, the session is flagged as an **Anomaly**.
+    *   If both pass (or one passes and the other abstains), the session is **Normal**.
+5.  **Response**:
+    *   **Normal**: API returns `{"is_anomaly": false}`. No action taken.
+    *   **Anomaly**: API returns `{"is_anomaly": true}`.
+6.  **Enforcement**: The extension receives the flag and immediately re-injects the **Password Overlay**, locking the browser session until identity is re-verified.
 
 ---
 
 ### 4. Visualization
 
-The following diagram illustrates the complete architectural flow, including the new verification step.
+The following diagram illustrates the "Dissect and Score" architecture.
 
 ```mermaid
-graph LR
-    subgraph "Chrome Browser (Client)"
-        direction LR
-        User(👤 User) -- "Interacts" --> ContentScript[Content Script]
-        ContentScript -- "Raw Events" --> BackgroundScript[Background Script]
-        BackgroundScript -- "Aggregates Data (JSON)" --> BackgroundScript
+graph TD
+    subgraph "Chrome Extension"
+        User(👤 User Activity) --> Collector[Hybrid Collector]
+        Collector -- "Aggregated JSON" --> API_Client
     end
 
-    subgraph "FastAPI Backend (Server)"
-        direction TB
-        API[API Endpoints<br>/score, /train, /verify_password]
-        FeatureExtractor[Feature Extraction Engine]
-        ModelManager[ML Model Manager]
-        AuthManager[Auth & Password Manager]
+    subgraph "FastAPI Backend"
+        API_Client -- "POST /score" --> Dissector[Feature Extraction & Dissection]
         
-        API -- "/score, /train" --> FeatureExtractor
-        FeatureExtractor --> ModelManager
-        API -- "/verify_password" --> AuthManager
+        Dissector -- "Mouse Features" --> GateM{Count > 30?}
+        Dissector -- "Typing Features" --> GateK{Count > 6?}
+        
+        GateM -- "Yes" --> ModelM[🐭 Mouse Specialist Model]
+        GateM -- "No" --> AbstainM[Abstain - Safe]
+        
+        GateK -- "Yes" --> ModelK[⌨️ Typing Specialist Model]
+        GateK -- "No" --> AbstainK[Abstain - Safe]
+        
+        ModelM --> ScoreM[Mouse Score]
+        ModelK --> ScoreK[Typing Score]
+        
+        ScoreM & ScoreK --> Logic{Is EITHER Score < Threshold?}
+        
+        Logic -- "Yes" --> Response[Anomaly Detected!]
+        Logic -- "No" --> ResponseOK[Normal Behavior]
     end
 
-    subgraph "Persistence"
-        ModelStorage[(Trained Models)]
-        UserDB[(User Credentials<br>Hashed Passwords)]
-    end
-
-    BackgroundScript -- "POST /score or /train" --> API
-    API -- "JSON Response" --> BackgroundScript
-
-    ModelManager -- "Loads/Saves Model" --> ModelStorage
-    AuthManager -- "Loads/Saves Hash" --> UserDB
-
-    User -- "Enters Password" --> BackgroundScript
-    BackgroundScript -- "POST /verify_password" --> API
+    Response -- "Lock Interface" --> User
 ```
